@@ -25,7 +25,7 @@ PR). This grants the maintainer the right to ship your code in both the
 open-source and the App Store builds. PRs without a signed CLA cannot
 be merged — no exceptions, however small the change.
 
-### Building from source
+### Building the iOS app
 
 1. Xcode 26+ (iOS 26 SDK). Open
    `apps/ios/Orange Cloud/Orange Cloud.xcodeproj`.
@@ -41,6 +41,26 @@ be merged — no exceptions, however small the change.
    Self-compiled builds then have every Pro feature enabled — this is
    intentional, not a hack.
 4. Change your Bundle ID / App Group / signing team to your own.
+
+### Building the Android app
+
+Native Kotlin + Jetpack Compose in [`apps/android/`](apps/android/README.md)
+(min API 31, target/compile API 36).
+
+1. JDK 17 + Android SDK (`android-36`). Open `apps/android/` in Android
+   Studio, or use the bundled Gradle wrapper directly: `./gradlew
+   :app:assembleOssDebug`.
+2. Two product flavors: `play` (Google Play, with Billing) and `oss`
+   (self-compiled, no Billing, `isPro` always true — the equivalent of
+   the iOS `OPENSOURCE_UNLOCKED` build).
+3. **OAuth client**: the `play` flavor embeds the official client ID (a
+   public PKCE identifier, same value as iOS). The `oss` flavor ships
+   empty — set your own in `apps/android/local.properties`
+   (`OAUTH_CLIENT_ID=…`) and deploy your own callback relay; the
+   official client is not for third-party builds.
+
+See [`apps/android/README.md`](apps/android/README.md) for the full
+build matrix and architecture.
 
 ### Code guidelines
 
@@ -76,7 +96,7 @@ be merged — no exceptions, however small the change.
 维护者把你的代码同时用于开源版与 App Store 专有版的权利。未签署的 PR
 一律不合并。
 
-### 自行编译
+### 编译 iOS 版
 
 1. Xcode 26+，打开 `apps/ios/Orange Cloud/Orange Cloud.xcodeproj`。
 2. **OAuth Client**：`OAuthConfig.swift` 内置官方 Client ID——OAuth
@@ -89,6 +109,23 @@ be merged — no exceptions, however small the change.
    `SWIFT_ACTIVE_COMPILATION_CONDITIONS` 添加 `OPENSOURCE_UNLOCKED`，
    即可解锁全部 Pro 功能——这是设计意图，不是漏洞。
 4. Bundle ID / App Group / 签名团队请改为你自己的。
+
+### 编译 Android 版
+
+原生 Kotlin + Jetpack Compose，位于 [`apps/android/`](apps/android/README.md)
+（最低 API 31，目标 / 编译 API 36）。
+
+1. JDK 17 + Android SDK（`android-36`）。用 Android Studio 打开
+   `apps/android/`，或直接用内置的 Gradle Wrapper：`./gradlew
+   :app:assembleOssDebug`。
+2. 两个产品风味：`play`（Google Play，带 Billing）与 `oss`（自编译、
+   无 Billing、`isPro` 恒真——等价于 iOS 的 `OPENSOURCE_UNLOCKED` 构建）。
+3. **OAuth Client**：`play` 风味内置官方 Client ID（OAuth PKCE 下为
+   公开标识符，与 iOS 同值）；`oss` 风味默认空串，请在
+   `apps/android/local.properties` 填入自建 Client（`OAUTH_CLIENT_ID=…`）
+   并部署自己的回调中转——官方 Client 不向第三方构建开放。
+
+完整构建矩阵与架构见 [`apps/android/README.md`](apps/android/README.md)。
 
 ### 代码规范
 

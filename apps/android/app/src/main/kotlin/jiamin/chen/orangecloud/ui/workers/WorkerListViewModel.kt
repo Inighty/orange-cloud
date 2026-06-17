@@ -1,0 +1,81 @@
+package jiamin.chen.orangecloud.ui.workers
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import jiamin.chen.orangecloud.core.auth.AuthRepository
+import jiamin.chen.orangecloud.core.auth.Scopes
+import jiamin.chen.orangecloud.data.model.WorkerScript
+import jiamin.chen.orangecloud.data.repository.AccountStore
+import jiamin.chen.orangecloud.data.repository.WorkerRepository
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+data class WorkerListUiState(
+    val workers: List<WorkerScript> = emptyList(),
+    val isLoading: Boolean = false,
+    val hasError: Boolean = false,
+    /** 未授予 workers-scripts.read：前置拦截，不打 API，提示去授权。 */
+    val missingScope: Boolean = false,
+)
+
+@OptIn(ExperimentalCoroutinesApi::class)
+@HiltViewModel
+class WorkerListViewModel @Inject constructor(
+    private val accountStore: AccountStore,
+    private val workerRepository: WorkerRepository,
+    authRepository: AuthRepository,
+) : ViewModel() {
+
+    private val hasReadScope = authRepository.hasScope(Scopes.WORKERS_READ)
+    private val loading = MutableStateFlow(false)
+    private val error = MutableStateFlow(false)
+
+    private val workers: Flow<List<WorkerScript>> = accountStore.selectedAccountId.flatMapLatest { id ->
+        if (id == null) flowOf(emptyList()) else workerRepository.observeWorkers(id)
+    }
+
+    val uiState: StateFlow<WorkerListUiState> =
+        combine(workers, loading, error) { list, isLoading, hasError ->
+            WorkerListUiState(
+                workers = list,
+                isLoading = isLoading,
+                hasError = hasError,
+                missingScope = !hasReadScope,
+            )
+        }.stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            WorkerListUiState(isLoading = hasReadScope, missingScope = !hasReadScope),
+        )
+
+    init {
+        refresh()
+    }
+
+    fun refresh() {
+        if (!hasReadScope) return
+        viewModelScope.launch {
+            loading.value = true
+            error.value = false
+            try {
+                accountStore.ensureLoaded()
+                val id = accountStore.selectedAccountId.value
+                if (id == null) error.value = true else workerRepository.refreshWorkers(id)
+            } catch (e: Exception) {
+                error.value = true
+            } finally {
+                loading.value = false
+            }
+        }
+    }
+}

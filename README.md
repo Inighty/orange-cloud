@@ -53,10 +53,13 @@ This repository is licensed under **AGPL-3.0 + Commons Clause**. You're free to 
 orange-cloud/
 ├── apps/
 │   ├── ios/        # The iOS / iPadOS / watchOS app (Swift / SwiftUI, Xcode project)
+│   ├── android/    # The Android client (Kotlin / Jetpack Compose) — in active development
 │   └── web/        # Landing page + OAuth callback relay (Next.js on Cloudflare Workers)
 ├── package.json    # pnpm workspaces root
 └── turbo.json
 ```
+
+> An **Android** client — native Kotlin + Jetpack Compose, same design and value as iOS — lives in [`apps/android/`](apps/android/README.md) and is in active development (not yet published to Google Play).
 
 ### Building from source
 
@@ -104,10 +107,13 @@ App 免费版支持单账号与完整的域名 / DNS 功能。在 App Store 官�
 orange-cloud/
 ├── apps/
 │   ├── ios/        # iOS / iPadOS / watchOS App（Swift / SwiftUI，Xcode 工程）
+│   ├── android/    # Android 客户端（Kotlin / Jetpack Compose）——开发中
 │   └── web/        # 落地页 + OAuth 回调中转（Next.js on Cloudflare Workers）
 ├── package.json    # pnpm workspaces 根
 └── turbo.json
 ```
+
+> **Android** 客户端——原生 Kotlin + Jetpack Compose，与 iOS 同源的设计与价值——位于 [`apps/android/`](apps/android/README.md)，正在开发中（尚未上架 Google Play）。
 
 ### 自行编译
 

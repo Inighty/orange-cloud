@@ -1,0 +1,50 @@
+package jiamin.chen.orangecloud.ui.login
+
+import android.net.Uri
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import jiamin.chen.orangecloud.core.auth.AuthRepository
+import jiamin.chen.orangecloud.core.auth.PermissionCatalog
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@HiltViewModel
+class LoginViewModel @Inject constructor(
+    private val authRepository: AuthRepository,
+) : ViewModel() {
+
+    private val launchChannel = Channel<Uri>(Channel.BUFFERED)
+    /** 一次性事件：屏幕收到后用 Custom Tab 打开授权页（freshLogin 时 URL 已包成先登出再授权） */
+    val launchAuthTab = launchChannel.receiveAsFlow()
+
+    val redirectError: StateFlow<String?> = authRepository.state
+        .map { it.redirectError }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun login(
+        selectedIds: Set<String> = PermissionCatalog.defaultSelectedIds,
+        freshLogin: Boolean = false,
+    ) {
+        launchAuth(PermissionCatalog.scopeString(selectedIds), freshLogin)
+    }
+
+    /** 按模块读/写级别登录（授权屏用）。levels[id]=true 读写，false 只读。 */
+    fun loginWithLevels(levels: Map<String, Boolean>, freshLogin: Boolean = false) {
+        launchAuth(PermissionCatalog.scopeString(levels), freshLogin)
+    }
+
+    private fun launchAuth(scopeString: String, freshLogin: Boolean) {
+        viewModelScope.launch {
+            authRepository.clearRedirectError()
+            runCatching { authRepository.buildAuthorizationUri(scopeString, freshLogin) }
+                .onSuccess { launchChannel.send(it) }
+        }
+    }
+}
