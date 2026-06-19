@@ -12,6 +12,17 @@ nonisolated struct CFAPIResponse<T: Codable & Sendable>: Codable, Sendable {
     let success:  Bool
     let errors:   [CFAPIError]
     let messages: [CFAPIMessage]?
+
+    enum CodingKeys: String, CodingKey { case result, success, errors, messages }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        result   = try c.decodeIfPresent(T.self, forKey: .result)
+        success  = try c.decode(Bool.self, forKey: .success)
+        // 部分端点（如 workers/domains）回 errors:null，宽容降级为空数组
+        errors   = (try? c.decode([CFAPIError].self, forKey: .errors)) ?? []
+        messages = try c.decodeIfPresent([CFAPIMessage].self, forKey: .messages)
+    }
 }
 
 nonisolated struct CFAPIResponseArray<T: Codable & Sendable>: Codable, Sendable {
@@ -23,6 +34,15 @@ nonisolated struct CFAPIResponseArray<T: Codable & Sendable>: Codable, Sendable 
     enum CodingKeys: String, CodingKey {
         case result, success, errors
         case resultInfo = "result_info"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        result     = try c.decodeIfPresent([T].self, forKey: .result)
+        success    = try c.decode(Bool.self, forKey: .success)
+        // 部分端点回 errors:null，宽容降级为空数组
+        errors     = (try? c.decode([CFAPIError].self, forKey: .errors)) ?? []
+        resultInfo = try c.decodeIfPresent(ResultInfo.self, forKey: .resultInfo)
     }
 }
 

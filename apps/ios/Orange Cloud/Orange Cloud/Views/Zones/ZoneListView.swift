@@ -14,6 +14,7 @@ import TipKit
 struct ZoneListView: View {
 
     @Environment(SessionStore.self) private var session
+    @Environment(AuthManager.self) private var auth
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Query private var cachedZones: [CachedZone]
@@ -21,6 +22,8 @@ struct ZoneListView: View {
     @State private var viewModel: ZoneListViewModel
     @State private var searchText = ""
     @State private var selectedZone: CachedZone?
+    @State private var showAddSheet = false
+    @State private var showAddDenied = false
     @Namespace private var namespace
 
     init(session: SessionStore) {
@@ -42,6 +45,15 @@ struct ZoneListView: View {
         cachedZones.filter { $0.status == "active" }.count
     }
 
+    // MARK: - 添加域名（zone.write 门控）
+
+    private var canWrite: Bool { auth.hasScope("zone.write") }
+
+    /// 有 zone.write 才展示添加表单，否则弹权限提示（同 DNS 的处理）
+    private func requireAddZone() {
+        if canWrite { showAddSheet = true } else { showAddDenied = true }
+    }
+
     var body: some View {
         Group {
             if sizeClass == .regular {
@@ -52,6 +64,26 @@ struct ZoneListView: View {
         }
         .task {
             await refresh()
+        }
+        .sheet(isPresented: $showAddSheet) {
+            if let account = session.selectedAccount {
+                AddZoneView(
+                    accountId: account.id,
+                    accountName: account.name,
+                    zoneService: session.zoneService
+                )
+            }
+        }
+        .alert("权限不足", isPresented: $showAddDenied) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("当前授权未包含域名编辑权限（zone.write）。\n请在设置中退出登录后重新授权「域名」并开启编辑权限。")
+        }
+    }
+
+    private var addButton: some View {
+        Button("添加域名", systemImage: "plus") {
+            requireAddZone()
         }
     }
 
@@ -85,6 +117,9 @@ struct ZoneListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     refreshButton
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    addButton
                 }
             }
             .navigationSplitViewColumnWidth(min: 300, ideal: 340)
@@ -124,6 +159,9 @@ struct ZoneListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     refreshButton
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    addButton
                 }
             }
         }
@@ -167,14 +205,23 @@ struct ZoneListView: View {
         ContentUnavailableView {
             Label("没有域名", systemImage: "globe.slash")
         } description: {
-            Text("当前账号下还没有域名，去 Cloudflare 添加一个吧")
+            Text(canWrite
+                 ? String(localized: "当前账号下还没有域名，现在就添加第一个吧")
+                 : String(localized: "当前账号下还没有域名"))
         } actions: {
-            Button("刷新") {
-                Task { await refresh() }
+            if canWrite {
+                Button("添加域名") { showAddSheet = true }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.ocOrangePressed)
+                    .fontWeight(.bold)
+                Button("刷新") { Task { await refresh() } }
+                    .buttonStyle(.bordered)
+            } else {
+                Button("刷新") { Task { await refresh() } }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.ocOrangePressed)
+                    .fontWeight(.bold)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.ocOrangePressed)
-            .fontWeight(.bold)
         }
     }
 

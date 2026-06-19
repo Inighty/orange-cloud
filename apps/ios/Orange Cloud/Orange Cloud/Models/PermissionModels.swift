@@ -115,10 +115,10 @@ extension FeaturePermission {
         .init(
             id: "tunnels",
             title: String(localized: "Cloudflare Tunnel"),
-            description: String(localized: "查看内网穿透隧道与连接状态"),
+            description: String(localized: "查看隧道与连接状态；读写可新建隧道、配置公共主机名路由"),
             icon: "arrow.triangle.2.circlepath",
             readScopes: ["argotunnel.read"],
-            editScopes: [],
+            editScopes: ["argotunnel.write"],
             isRequired: false
         ),
         .init(

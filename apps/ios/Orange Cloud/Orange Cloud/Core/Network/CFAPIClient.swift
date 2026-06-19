@@ -45,12 +45,17 @@ actor CFAPIClient {
 
     /// 返回原始响应体（KV value 等非 JSON 信封端点）
     func getRaw(_ path: String, queryItems: [URLQueryItem] = []) async throws -> Data {
+        try await performRequest(method: "GET", path: path, queryItems: queryItems, body: nil, contentType: nil).0
+    }
+
+    /// 原始响应体 + HTTP 响应（需读 Content-Type 的 boundary，如 Worker 源码 multipart）
+    func getRawResponse(_ path: String, queryItems: [URLQueryItem] = []) async throws -> (Data, HTTPURLResponse) {
         try await performRequest(method: "GET", path: path, queryItems: queryItems, body: nil, contentType: nil)
     }
 
     /// 原始字节 PUT（R2 对象上传等），自带 Content-Type
     func putRaw<T: Codable & Sendable>(_ path: String, body: Data, contentType: String) async throws -> T {
-        let data = try await performRequest(
+        let (data, _) = try await performRequest(
             method: "PUT", path: path, queryItems: [], body: body, contentType: contentType
         )
         return try Self.decode(data, path: path)
@@ -67,7 +72,7 @@ actor CFAPIClient {
         }
         body.append(Data("--\(boundary)--\r\n".utf8))
 
-        let data = try await performRequest(
+        let (data, _) = try await performRequest(
             method: "PUT", path: path, queryItems: [], body: body,
             contentType: "multipart/form-data; boundary=\(boundary)"
         )
@@ -104,11 +109,50 @@ actor CFAPIClient {
 
         body.append(Data("--\(boundary)--\r\n".utf8))
 
-        let data = try await performRequest(
+        let (data, _) = try await performRequest(
             method: "PUT", path: path, queryItems: [], body: body,
             contentType: "multipart/form-data; boundary=\(boundary)"
         )
         return try Self.decode(data, path: path)
+    }
+
+    /// 通用 multipart 请求：一个 JSON part（metadata / settings）+ 可选单个文件 part，支持 method 与 query。
+    /// Worker 上传（PUT，metadata + 模块文件，带 ?bindings_inherit=strict）与改设置（PATCH，settings）共用。
+    func multipartRequest<T: Codable & Sendable, M: Encodable & Sendable>(
+        method: String,
+        _ path: String,
+        queryItems: [URLQueryItem] = [],
+        jsonPartName: String,
+        jsonPart: M,
+        file: (name: String, contentType: String, content: Data)? = nil
+    ) async throws -> T {
+        let boundary = "OrangeCloud-\(UUID().uuidString)"
+        var body = Data()
+
+        // JSON part（metadata / settings）
+        let json = try JSONEncoder().encode(jsonPart)
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"\(jsonPartName)\"\r\n".utf8))
+        body.append(Data("Content-Type: application/json\r\n\r\n".utf8))
+        body.append(json)
+        body.append(Data("\r\n".utf8))
+
+        // 可选文件 part（脚本模块；字段名 = filename，main_module/body_part 引用它）
+        if let file {
+            body.append(Data("--\(boundary)\r\n".utf8))
+            body.append(Data("Content-Disposition: form-data; name=\"\(file.name)\"; filename=\"\(file.name)\"\r\n".utf8))
+            body.append(Data("Content-Type: \(file.contentType)\r\n\r\n".utf8))
+            body.append(file.content)
+            body.append(Data("\r\n".utf8))
+        }
+
+        body.append(Data("--\(boundary)--\r\n".utf8))
+
+        let (data, _) = try await performRequest(
+            method: method, path: path, queryItems: queryItems, body: body,
+            contentType: "multipart/form-data; boundary=\(boundary)"
+        )
+        return try Self.decode(data, path: path, method: method)
     }
 
     /// GraphQL Analytics API。信封是 {data, errors}（GraphQL 错误时 HTTP 仍为 200），
@@ -141,13 +185,13 @@ actor CFAPIClient {
         queryItems: [URLQueryItem],
         body: Data?
     ) async throws -> T {
-        let data = try await performRequest(
+        let (data, _) = try await performRequest(
             method: method, path: path, queryItems: queryItems, body: body, contentType: "application/json"
         )
         return try Self.decode(data, path: path, method: method)
     }
 
-    /// 统一的 HTTP 执行：Token 注入与刷新、401 重试一次、HTTP 错误映射，返回原始 Data
+    /// 统一的 HTTP 执行：Token 注入与刷新、401 重试一次、HTTP 错误映射，返回原始 Data + 响应
     private func performRequest(
         method: String,
         path: String,
@@ -155,7 +199,7 @@ actor CFAPIClient {
         body: Data?,
         contentType: String?,
         isRetry: Bool = false
-    ) async throws -> Data {
+    ) async throws -> (Data, HTTPURLResponse) {
 
         // 1. 检查 Token 是否临期，如需则先刷新
         let token = try await validAccessToken()
@@ -213,7 +257,7 @@ actor CFAPIClient {
         // 5. HTTP 错误处理（优先透出 CF 返回的业务错误信息）
         switch http.statusCode {
         case 200...299:
-            return data
+            return (data, http)
         case 401:
             throw APIError.unauthorized
         case 429:

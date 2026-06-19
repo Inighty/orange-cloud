@@ -1,0 +1,273 @@
+//
+//  WorkerConfigModels.swift
+//  Orange Cloud
+//
+//  Workers 脚本管理（编辑 / 变量 / 密钥 / 触发器）相关模型。
+//  GET  /accounts/{a}/workers/scripts/{n}/content     源码（模块→multipart，service worker→raw JS）
+//  PUT  /accounts/{a}/workers/scripts/{n}             上传（multipart：metadata + 模块 part），保留绑定用 inherit
+//  GET  /accounts/{a}/workers/scripts/{n}/settings    绑定 + 兼容性日期/标志
+//  PATCH .../settings                                 改绑定（变量），其余绑定回传 inherit
+//  GET/PUT/DELETE .../secrets                          密钥（仅名+类型，无值）
+//  GET/PUT .../schedules                               Cron 触发器（整组替换）
+//
+
+import Foundation
+
+// MARK: - 脚本源码
+
+/// 单个脚本模块（multipart 的一个 part；service worker 视为单条）
+nonisolated struct WorkerModule: Identifiable, Hashable, Sendable {
+    let name:        String      // part 名 / 文件名（上传时 main_module / body_part 引用它）
+    let contentType: String      // application/javascript+module 或 application/javascript
+    let body:        String
+
+    var id: String { name }
+}
+
+/// 解析后的脚本内容。仅单模块（或 service worker）支持编辑，多模块只读。
+nonisolated struct WorkerContent: Sendable {
+    let modules:    [WorkerModule]
+    let isModule:   Bool         // true = ES module（main_module）；false = 经典 service worker（body_part）
+
+    /// 单模块 / service worker 才可在客户端安全往返编辑；多模块（捆绑产物）只读
+    var isEditable: Bool { modules.count <= 1 }
+
+    /// 编辑目标模块（可编辑时即唯一模块）
+    var mainModule: WorkerModule? { modules.first }
+
+    /// 从 content 端点的原始响应解析（按 Content-Type 的 boundary 切分 multipart）
+    nonisolated static func parse(data: Data, contentType: String?) -> WorkerContent {
+        let ct = contentType ?? ""
+        guard let boundary = Self.boundary(from: ct) else {
+            // 非 multipart = 经典 service worker，整体即正文
+            let body = String(decoding: data, as: UTF8.self)
+            let module = WorkerModule(name: "worker.js", contentType: "application/javascript", body: body)
+            return WorkerContent(modules: [module], isModule: false)
+        }
+        let modules = Self.parseParts(String(decoding: data, as: UTF8.self), boundary: boundary)
+        return WorkerContent(modules: modules, isModule: true)
+    }
+
+    private nonisolated static func boundary(from contentType: String) -> String? {
+        guard contentType.localizedCaseInsensitiveContains("multipart/"),
+              let range = contentType.range(of: "boundary=") else { return nil }
+        var value = String(contentType[range.upperBound...])
+        if let semi = value.firstIndex(of: ";") { value = String(value[..<semi]) }
+        return value.trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
+    }
+
+    /// 朴素 multipart/form-data 解析：按分隔符切块，块内首个空行分隔头与正文。
+    /// 脚本模块均为文本（JS），按 UTF-8 处理；二进制模块（如 WASM）只读展示用占位。
+    private nonisolated static func parseParts(_ raw: String, boundary: String) -> [WorkerModule] {
+        let delimiter = "--\(boundary)"
+        var modules: [WorkerModule] = []
+        for chunk in raw.components(separatedBy: delimiter) {
+            let part = chunk.trimmingCharacters(in: CharacterSet(charactersIn: "\r\n"))
+            guard !part.isEmpty, part != "--" else { continue }       // 跳过前导/收尾
+            guard let sep = part.range(of: "\r\n\r\n") ?? part.range(of: "\n\n") else { continue }
+            let headers = String(part[..<sep.lowerBound])
+            let body    = String(part[sep.upperBound...])
+            let name = Self.headerValue(headers, key: "name") ?? Self.headerValue(headers, key: "filename") ?? "module"
+            let type = Self.contentTypeHeader(headers) ?? "application/javascript+module"
+            modules.append(WorkerModule(name: name, contentType: type, body: body))
+        }
+        return modules
+    }
+
+    /// 取 Content-Disposition 里形如 name="x" 的值
+    private nonisolated static func headerValue(_ headers: String, key: String) -> String? {
+        guard let range = headers.range(of: "\(key)=\"") else { return nil }
+        let rest = headers[range.upperBound...]
+        guard let end = rest.firstIndex(of: "\"") else { return nil }
+        return String(rest[..<end])
+    }
+
+    private nonisolated static func contentTypeHeader(_ headers: String) -> String? {
+        for line in headers.components(separatedBy: CharacterSet.newlines) {
+            if line.lowercased().hasPrefix("content-type:") {
+                return line.dropFirst("content-type:".count).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - 绑定与设置
+
+/// 脚本绑定（KV / D1 / R2 / 密钥 / 变量 等）。读展示与 inherit 回传只需 type/name；变量另读 text。
+/// 容错解码：未建模的新绑定类型不致整页失败（缺字段降级为空串，调用方过滤空名）。
+nonisolated struct WorkerBinding: Codable, Identifiable, Hashable, Sendable {
+    let type: String
+    let name: String
+    let text: String?       // plain_text 变量的值；其余类型为 nil
+
+    var id: String { "\(type)/\(name)" }
+
+    enum CodingKeys: String, CodingKey { case type, name, text }
+
+    init(type: String, name: String, text: String? = nil) {
+        self.type = type
+        self.name = name
+        self.text = text
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = (try? c.decode(String.self, forKey: .type)) ?? ""
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        text = try? c.decode(String.self, forKey: .text)
+    }
+
+    var isSecret:    Bool { type == "secret_text" || type == "secrets_store_secret" }
+    var isPlainText: Bool { type == "plain_text" }
+
+    /// 人类可读的绑定类型标签
+    var typeLabel: String {
+        switch type {
+        case "plain_text":           String(localized: "变量")
+        case "secret_text",
+             "secrets_store_secret": String(localized: "密钥")
+        case "kv_namespace":         "KV"
+        case "d1":                   "D1"
+        case "r2_bucket":            "R2"
+        case "queue":                String(localized: "队列")
+        case "durable_object_namespace": "Durable Object"
+        case "service":              String(localized: "Service 绑定")
+        case "ai":                   "Workers AI"
+        case "vectorize":            "Vectorize"
+        case "analytics_engine":     "Analytics Engine"
+        case "browser":              String(localized: "浏览器渲染")
+        default:                     type
+        }
+    }
+
+    /// 回传时转为 inherit（按名保留旧绑定，密钥值我们读不到也能保住）
+    func asInherit() -> WorkerBindingInput { WorkerBindingInput(type: "inherit", name: name) }
+}
+
+/// 脚本设置（GET .../settings）。绑定逐个容错解码、过滤空名。
+nonisolated struct WorkerSettings: Codable, Sendable {
+    let bindings:           [WorkerBinding]
+    let compatibilityDate:  String?
+    let compatibilityFlags: [String]?
+    let usageModel:         String?
+    let logpush:            Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case bindings, logpush
+        case compatibilityDate  = "compatibility_date"
+        case compatibilityFlags = "compatibility_flags"
+        case usageModel         = "usage_model"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = (try? c.decode([WorkerBinding].self, forKey: .bindings)) ?? []
+        bindings           = raw.filter { !$0.name.isEmpty }
+        compatibilityDate  = try? c.decode(String.self, forKey: .compatibilityDate)
+        compatibilityFlags = try? c.decode([String].self, forKey: .compatibilityFlags)
+        usageModel         = try? c.decode(String.self, forKey: .usageModel)
+        logpush            = try? c.decode(Bool.self, forKey: .logpush)
+    }
+
+    /// 把现有绑定整组转为 inherit，供「只改代码/某个变量、其余保持」的安全回传
+    func inheritedBindings(excludingName: String? = nil) -> [WorkerBindingInput] {
+        bindings
+            .filter { $0.name != excludingName }
+            .map { $0.asInherit() }
+    }
+}
+
+// MARK: - 上传 / 写入请求体
+
+/// 上传 / patch settings 时的单条绑定。inherit 只发 {type,name}；plain_text 发 {type,name,text}。
+nonisolated struct WorkerBindingInput: Codable, Sendable {
+    let type: String
+    let name: String
+    let text: String?
+
+    init(type: String, name: String, text: String? = nil) {
+        self.type = type
+        self.name = name
+        self.text = text
+    }
+}
+
+/// 脚本上传 multipart 的 metadata part。module 用 main_module；service worker 用 body_part。
+nonisolated struct WorkerUploadMetadata: Codable, Sendable {
+    let mainModule:         String?
+    let bodyPart:           String?
+    let compatibilityDate:  String?
+    let compatibilityFlags: [String]?
+    let bindings:           [WorkerBindingInput]
+
+    enum CodingKeys: String, CodingKey {
+        case bindings
+        case mainModule         = "main_module"
+        case bodyPart           = "body_part"
+        case compatibilityDate  = "compatibility_date"
+        case compatibilityFlags = "compatibility_flags"
+    }
+}
+
+/// PATCH settings 的 settings part（改变量时回传：变更项 + 其余 inherit）
+nonisolated struct WorkerSettingsPatch: Codable, Sendable {
+    let bindings:           [WorkerBindingInput]
+    let compatibilityDate:  String?
+    let compatibilityFlags: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case bindings
+        case compatibilityDate  = "compatibility_date"
+        case compatibilityFlags = "compatibility_flags"
+    }
+}
+
+// MARK: - 密钥
+
+/// 密钥（GET .../secrets，仅名 + 类型，永不含值）
+nonisolated struct WorkerSecret: Codable, Identifiable, Hashable, Sendable {
+    let name: String
+    let type: String?
+    var id: String { name }
+}
+
+/// 新建 / 更新密钥（PUT .../secrets）
+nonisolated struct WorkerSecretInput: Codable, Sendable {
+    let name: String
+    let text: String
+    let type: String
+
+    init(name: String, text: String) {
+        self.name = name
+        self.text = text
+        self.type = "secret_text"
+    }
+}
+
+// MARK: - Cron 触发器
+
+/// 单条 Cron 触发器（GET .../schedules）
+nonisolated struct WorkerSchedule: Codable, Identifiable, Hashable, Sendable {
+    let cron:       String
+    let createdOn:  String?
+    let modifiedOn: String?
+
+    var id: String { cron }
+
+    enum CodingKeys: String, CodingKey {
+        case cron
+        case createdOn  = "created_on"
+        case modifiedOn = "modified_on"
+    }
+}
+
+/// schedules 端点 result 形态 { schedules: [...] }
+nonisolated struct WorkerSchedulesResult: Codable, Sendable {
+    let schedules: [WorkerSchedule]
+}
+
+/// PUT .../schedules 的单条（整组替换，请求体是裸数组 [{cron}]）
+nonisolated struct WorkerScheduleInput: Codable, Sendable {
+    let cron: String
+}

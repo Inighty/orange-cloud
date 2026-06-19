@@ -158,11 +158,51 @@ final class D1DatabaseListViewModel {
     var databases: [D1Database] = []
     var isLoading = false
     var error: String?
+    var isCreating = false
+    var didCreate = false      // sensoryFeedback 触发器
+    var isDeleting = false
+    var didDelete = false      // sensoryFeedback 触发器
 
     private let service: D1Service
 
     init(service: D1Service) {
         self.service = service
+    }
+
+    /// 创建数据库：成功后把新库插到列表顶端（新库为空，无需回填详情），返回 true。
+    func create(accountId: String, name: String, locationHint: String?) async -> Bool {
+        guard !isCreating else { return false }
+        isCreating = true
+        error = nil
+        defer { isCreating = false }
+        do {
+            let created = try await service.createDatabase(
+                accountId: accountId, name: name, locationHint: locationHint
+            )
+            databases.insert(created, at: 0)
+            didCreate.toggle()
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    /// 删除数据库：成功后从列表移除，返回 true。不可恢复，调用前须经二次确认。
+    func delete(accountId: String, database: D1Database) async -> Bool {
+        guard !isDeleting else { return false }
+        isDeleting = true
+        error = nil
+        defer { isDeleting = false }
+        do {
+            try await service.deleteDatabase(accountId: accountId, databaseId: database.uuid)
+            databases.removeAll { $0.uuid == database.uuid }
+            didDelete.toggle()
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
     }
 
     func load(accountId: String) async {

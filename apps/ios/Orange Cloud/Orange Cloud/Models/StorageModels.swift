@@ -109,6 +109,18 @@ nonisolated struct D1QueryRequest: Codable, Sendable {
     let params: [String]?    // 参数化查询（行编辑用，避免拼接注入）
 }
 
+/// POST /accounts/{id}/d1/database 的请求体。primaryLocationHint 为空时
+/// 编码器自动省略该字段（Optional 走 encodeIfPresent），由 Cloudflare 就近放置。
+nonisolated struct D1CreateRequest: Codable, Sendable {
+    let name:                String
+    let primaryLocationHint: String?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case primaryLocationHint = "primary_location_hint"
+    }
+}
+
 /// PRAGMA table_info 解析后的列结构
 nonisolated struct D1Column: Identifiable, Sendable {
     let name:         String

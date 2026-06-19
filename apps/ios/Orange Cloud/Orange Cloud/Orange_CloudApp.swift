@@ -9,6 +9,7 @@ import SwiftUI
 import SwiftData
 import TipKit
 import CoreSpotlight
+import ActivityKit
 
 @main
 struct Orange_CloudApp: App {
@@ -27,6 +28,7 @@ struct Orange_CloudApp: App {
         BackgroundRefresh.register(authManager: manager)
         WatchSessionManager.shared.start(authManager: manager)
         EntitlementStore.shared.start()
+        Self.reapOrphanTailActivities()
         try? Tips.configure()
         AppLog.logLaunch(
             loggedIn: manager.isLoggedIn,
@@ -52,6 +54,14 @@ struct Orange_CloudApp: App {
             if scenePhase == .background {
                 BackgroundRefresh.schedule()
             }
+        }
+    }
+
+    /// 收尸：结束上次进程残留的 tail Live Activity。冷启动时没有任何 VM 持有引用，
+    /// 屏上若还挂着卡片，必是崩溃 / 强杀遗留的孤儿——逐个 .immediate 结束。
+    private static func reapOrphanTailActivities() {
+        for activity in Activity<TailActivityAttributes>.activities {
+            Task { await activity.end(nil, dismissalPolicy: .immediate) }
         }
     }
 

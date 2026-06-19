@@ -37,14 +37,22 @@ final class SnippetsViewModel {
     func load() async {
         isLoading = true
         error = nil
+        // 两个请求并发，但各自独立 await：任一失败都不连累另一个。
+        // 若用单个 do 把两次 try await 串起来，前一个抛错会让 async let 作用域提前退出，
+        // 把仍在飞行的兄弟请求一并取消（日志里现形为「已取消」红鲱鱼）——这里分开 catch 规避。
+        async let snippetsTask = service.list(zoneId: zoneId)
+        async let rulesTask    = service.rules(zoneId: zoneId)
+
         do {
-            async let snippetsTask = service.list(zoneId: zoneId)
-            async let rulesTask    = service.rules(zoneId: zoneId)
             snippets = try await snippetsTask
-            rules    = try await rulesTask
             loaded = true
         } catch {
             self.error = error.localizedDescription
+        }
+        do {
+            rules = try await rulesTask
+        } catch {
+            if self.error == nil { self.error = error.localizedDescription }
         }
         isLoading = false
     }

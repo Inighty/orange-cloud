@@ -46,8 +46,12 @@ final class WorkerTailViewModel {
     private var activity: Activity<TailActivityAttributes>?
     private var eventCount = 0
     private var lastActivityUpdate = Date.distantPast
+    private var heartbeatTask: Task<Void, Never>?
+    private var isBackground = false
 
     private static let maxLines = 1000
+    // Live Activity 多久没刷新就被系统判定为「停滞」并置灰；前台靠心跳持续续期
+    private static let staleWindow: TimeInterval = 30
 
     init(service: WorkerTailService, accountId: String, scriptName: String) {
         self.service = service
@@ -115,9 +119,9 @@ final class WorkerTailViewModel {
         }
     }
 
-    /// 流结束：用户主动停止则忽略；否则自动重建一次，再失败转为断开态
+    /// 流结束：用户主动停止 / 已进后台则忽略；否则自动重建一次，再失败转为断开态
     private func streamEnded(error: Error?) {
-        guard !userStopped else { return }
+        guard !userStopped, !isBackground else { return }
         if !didAutoReconnect {
             didAutoReconnect = true
             Task {
@@ -128,6 +132,27 @@ final class WorkerTailViewModel {
             state = .disconnected(reason: error?.localizedDescription ?? String(localized: "连接已断开"))
             updateActivity(force: true)
         }
+    }
+
+    // MARK: - 前后台
+
+    /// 进入后台：tail 的 WebSocket 会被系统挂起、无法再收事件（前台 URLSession 在挂起后不工作，
+    /// 后台 URLSession 又不支持 WebSocket）。立刻把 Live Activity 置为「已暂停」并停掉心跳——
+    /// 卡片诚实置灰而非冻结成「看着像在跑」。连接本身不动，交给系统挂起。
+    func enterBackground() {
+        guard !userStopped, !isBackground else { return }
+        isBackground = true
+        stopHeartbeat()
+        markActivityStale()
+    }
+
+    /// 回到前台：挂起期间连接基本已断（心跳停发 → tail session 多半已过期），
+    /// 主动重连一次并把卡片刷回活跃；事件计数沿用，用户看到的是无缝续上。
+    func enterForeground() {
+        guard isBackground else { return }
+        isBackground = false
+        guard !userStopped else { return }
+        Task { await start() }
     }
 
     // MARK: - 事件 → 日志行
@@ -176,36 +201,78 @@ final class WorkerTailViewModel {
     // MARK: - Live Activity
 
     private func startActivityIfNeeded() {
-        guard activity == nil,
-              ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        eventCount = 0
-        let content = ActivityContent(
-            state: TailActivityAttributes.ContentState(eventCount: 0, lastLine: "", isConnected: true),
-            staleDate: nil
-        )
-        activity = try? Activity.request(
-            attributes: TailActivityAttributes(scriptName: scriptName),
-            content: content
-        )
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        if activity == nil {
+            eventCount = 0
+            activity = try? Activity.request(
+                attributes: TailActivityAttributes(scriptName: scriptName),
+                content: makeContent(connected: true)
+            )
+        } else {
+            // 已有活动（多为后台→前台复活）：刷新回活跃态
+            updateActivity(force: true)
+        }
+        startHeartbeat()
     }
 
-    /// 节流更新：默认 1 秒一次，连接状态变化时强制
+    /// 节流更新：默认 1 秒一次，连接状态变化时强制。
+    /// 每次把 staleDate 推后 staleWindow——前台持续刷新即永不停滞，一旦挂起停更便到点自动置灰。
     private func updateActivity(force: Bool = false) {
         guard let activity else { return }
         guard force || Date().timeIntervalSince(lastActivityUpdate) > 1 else { return }
+        lastActivityUpdate = Date()
+        let content = makeContent(connected: state == .connected)
+        Task { await activity.update(content) }
+    }
+
+    /// 进后台时调用：staleDate=now 让系统立刻把卡片置灰，呈「已暂停」。
+    private func markActivityStale() {
+        guard let activity else { return }
         lastActivityUpdate = Date()
         let content = ActivityContent(
             state: TailActivityAttributes.ContentState(
                 eventCount: eventCount,
                 lastLine: lines.last?.text ?? "",
-                isConnected: state == .connected
+                isConnected: false
             ),
-            staleDate: nil
+            staleDate: Date()
         )
         Task { await activity.update(content) }
     }
 
+    private func makeContent(connected: Bool) -> ActivityContent<TailActivityAttributes.ContentState> {
+        ActivityContent(
+            state: TailActivityAttributes.ContentState(
+                eventCount: eventCount,
+                lastLine: lines.last?.text ?? "",
+                isConnected: connected
+            ),
+            staleDate: Date().addingTimeInterval(Self.staleWindow)
+        )
+    }
+
+    /// 心跳：前台连接期间即使没有新事件，也每 20s 续一次 staleDate，
+    /// 避免静默 worker（迟迟无请求）被误判停滞置灰。后台时随进程挂起自然冻结。
+    private func startHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(20))
+                guard let self, !Task.isCancelled else { break }
+                if !self.isBackground, self.state == .connected {
+                    self.updateActivity(force: true)
+                }
+            }
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+
     private func endActivity() {
+        stopHeartbeat()
         guard let activity else { return }
         self.activity = nil
         Task { await activity.end(nil, dismissalPolicy: .immediate) }

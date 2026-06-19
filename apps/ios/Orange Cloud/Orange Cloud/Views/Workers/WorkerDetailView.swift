@@ -54,6 +54,34 @@ struct WorkerDetailView: View {
             metricsSection
                 .glassRow()
 
+            Section("管理") {
+                ProGatedNavigationLink(
+                    label: String(localized: "变量与密钥"),
+                    systemImage: "key",
+                    requiredScope: "workers-scripts.read",
+                    feature: .workerSecrets
+                ) {
+                    WorkerSecretsView(accountId: script.accountId, scriptName: script.id, session: session)
+                }
+                ProGatedNavigationLink(
+                    label: String(localized: "触发器"),
+                    systemImage: "clock",
+                    requiredScope: "workers-scripts.read",
+                    feature: .workerTriggers
+                ) {
+                    WorkerTriggersView(accountId: script.accountId, scriptName: script.id, session: session)
+                }
+                ProGatedNavigationLink(
+                    label: String(localized: "域名"),
+                    systemImage: "globe",
+                    requiredScope: "workers-scripts.read",
+                    feature: .workerRoutes
+                ) {
+                    WorkerRoutesView(accountId: script.accountId, scriptName: script.id, session: session)
+                }
+            }
+            .glassRow()
+
             Section("调试") {
                 ProGatedNavigationLink(
                     label: String(localized: "实时日志"),

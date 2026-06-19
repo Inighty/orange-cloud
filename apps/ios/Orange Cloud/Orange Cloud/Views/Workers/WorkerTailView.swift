@@ -11,6 +11,7 @@ import TipKit
 struct WorkerTailView: View {
 
     @State private var viewModel: WorkerTailViewModel
+    @Environment(\.scenePhase) private var scenePhase
 
     init(accountId: String, scriptName: String, session: SessionStore) {
         _viewModel = State(initialValue: WorkerTailViewModel(
@@ -48,6 +49,14 @@ struct WorkerTailView: View {
         }
         .onDisappear {
             Task { await viewModel.stop() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // tail 连接进后台必断：置灰 Live Activity，回前台再复活重连
+            switch phase {
+            case .background: viewModel.enterBackground()
+            case .active:     viewModel.enterForeground()
+            default:          break
+            }
         }
     }
 

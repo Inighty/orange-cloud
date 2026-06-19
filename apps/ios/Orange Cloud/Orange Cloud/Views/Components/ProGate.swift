@@ -12,6 +12,7 @@ import SwiftUI
 /// 触发付费墙的场景，决定付费墙头部与锁定态文案
 nonisolated enum ProFeature: String, Identifiable, Sendable {
     case multiAccount, storage, workerTail, waf, tunnel, analyticsRange, snippets
+    case workerSecrets, workerTriggers, workerRoutes
 
     var id: String { rawValue }
 
@@ -24,6 +25,9 @@ nonisolated enum ProFeature: String, Identifiable, Sendable {
         case .tunnel:         String(localized: "Tunnel 需要 Pro")
         case .analyticsRange: String(localized: "更长时间范围需要 Pro")
         case .snippets:       String(localized: "Snippets 需要 Pro")
+        case .workerSecrets:  String(localized: "变量与密钥需要 Pro")
+        case .workerTriggers: String(localized: "触发器管理需要 Pro")
+        case .workerRoutes:   String(localized: "域名管理需要 Pro")
         }
     }
 
@@ -33,9 +37,12 @@ nonisolated enum ProFeature: String, Identifiable, Sendable {
         case .storage:        String(localized: "R2 对象存储、D1 数据库与 KV 键值管理属于 Orange Cloud Pro。")
         case .workerTail:     String(localized: "Workers 实时日志与灵动岛 Live Activity 属于 Orange Cloud Pro。")
         case .waf:            String(localized: "查看与启停 WAF 自定义规则属于 Orange Cloud Pro。")
-        case .tunnel:         String(localized: "Cloudflare Tunnel 状态查看属于 Orange Cloud Pro。")
+        case .tunnel:         String(localized: "Cloudflare Tunnel 的查看与管理（新建隧道、公共主机名路由）属于 Orange Cloud Pro。")
         case .analyticsRange: String(localized: "7 天与 30 天流量分析属于 Pro；24 小时视图永久免费。")
         case .snippets:       String(localized: "查看与管理域名的边缘 Snippets（JS 代码片段）属于 Orange Cloud Pro。")
+        case .workerSecrets:  String(localized: "管理 Workers 的环境变量与密钥属于 Orange Cloud Pro。")
+        case .workerTriggers: String(localized: "管理 Workers 的 Cron 定时触发器属于 Orange Cloud Pro。")
+        case .workerRoutes:   String(localized: "管理 Workers 的子域、自定义域与路由属于 Orange Cloud Pro。")
         }
     }
 
@@ -48,6 +55,9 @@ nonisolated enum ProFeature: String, Identifiable, Sendable {
         case .tunnel:         "arrow.triangle.2.circlepath"
         case .analyticsRange: "chart.xyaxis.line"
         case .snippets:       "curlybraces"
+        case .workerSecrets:  "key"
+        case .workerTriggers: "clock"
+        case .workerRoutes:   "globe"
         }
     }
 }

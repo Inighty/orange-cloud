@@ -48,6 +48,23 @@ struct D1Service {
         return result
     }
 
+    /// 创建数据库（POST 返回新建的 D1Database）。locationHint 为空走自动放置。
+    func createDatabase(accountId: String, name: String, locationHint: String? = nil) async throws -> D1Database {
+        let response: CFAPIResponse<D1Database> = try await client.post(
+            "accounts/\(accountId)/d1/database",
+            body: D1CreateRequest(name: name, primaryLocationHint: locationHint)
+        )
+        guard response.success, let result = response.result else {
+            throw response.toAPIError()
+        }
+        return result
+    }
+
+    /// 删除数据库（DELETE，连同全部表与数据，不可恢复）。
+    func deleteDatabase(accountId: String, databaseId: String) async throws {
+        try await client.delete("accounts/\(accountId)/d1/database/\(databaseId)")
+    }
+
     /// 执行 SQL（result 是 [D1QueryResult]，每条语句一个结果）。params 为参数化占位符值。
     func query(
         accountId: String,

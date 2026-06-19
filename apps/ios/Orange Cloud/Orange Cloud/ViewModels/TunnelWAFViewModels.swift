@@ -14,6 +14,7 @@ final class TunnelListViewModel {
 
     var tunnels: [Tunnel] = []
     var isLoading = false
+    var isSaving = false
     var error: String?
 
     private let service: TunnelService
@@ -31,6 +32,203 @@ final class TunnelListViewModel {
             self.error = error.localizedDescription
         }
         isLoading = false
+    }
+
+    /// 新建远程托管隧道，成功返回新隧道（供随后展示连接令牌）。
+    func createTunnel(name: String, accountId: String) async -> Tunnel? {
+        guard !isSaving else { return nil }
+        isSaving = true
+        error = nil
+        defer { isSaving = false }
+        do {
+            let tunnel = try await service.createTunnel(accountId: accountId, name: name)
+            tunnels.insert(tunnel, at: 0)
+            return tunnel
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// 删除隧道（先清理连接）。成功返回 true。
+    func deleteTunnel(_ tunnel: Tunnel, accountId: String) async -> Bool {
+        error = nil
+        do {
+            try await service.deleteTunnel(accountId: accountId, tunnelId: tunnel.id)
+            tunnels.removeAll { $0.id == tunnel.id }
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+}
+
+@Observable
+@MainActor
+final class TunnelDetailViewModel {
+
+    let tunnel: Tunnel
+
+    var token: String?
+    var config: TunnelConfig?
+    var isLoadingToken = false
+    var isLoadingConfig = false
+    var configLoaded = false
+    var isSaving = false
+    var error: String?
+    /// 保存公共主机名后的 DNS 提示（自动建 CNAME 成功，或需手动添加）
+    var dnsNotice: String?
+
+    private let accountId: String
+    private let tunnelService: TunnelService
+    private let dnsService: DNSService
+    private let zoneService: ZoneService
+    private let canWriteDNS: Bool
+    private var zonesCache: [Zone]?
+
+    init(tunnel: Tunnel, accountId: String, session: SessionStore, canWriteDNS: Bool) {
+        self.tunnel = tunnel
+        self.accountId = accountId
+        self.tunnelService = session.tunnelService
+        self.dnsService = session.dnsService
+        self.zoneService = session.zoneService
+        self.canWriteDNS = canWriteDNS
+    }
+
+    /// CNAME 目标：<隧道ID>.cfargotunnel.com
+    var cnameTarget: String { "\(tunnel.id).cfargotunnel.com" }
+
+    /// 非 catch-all 的公共主机名规则（供 UI 列表）
+    var publicHostnames: [IngressRule] {
+        (config?.ingress ?? []).filter { !$0.isCatchAll }
+    }
+
+    // MARK: - 加载
+
+    func loadToken() async {
+        guard token == nil, !isLoadingToken else { return }
+        isLoadingToken = true
+        defer { isLoadingToken = false }
+        do {
+            token = try await tunnelService.tunnelToken(accountId: accountId, tunnelId: tunnel.id)
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func loadConfiguration() async {
+        isLoadingConfig = true
+        error = nil
+        do {
+            config = try await tunnelService.configuration(accountId: accountId, tunnelId: tunnel.id)
+            configLoaded = true
+        } catch {
+            self.error = error.localizedDescription
+        }
+        isLoadingConfig = false
+    }
+
+    /// 清理失活连接（危险区）。活跃的 cloudflared 会自动重连。
+    func cleanupConnections() async {
+        guard !isSaving else { return }
+        isSaving = true
+        error = nil
+        defer { isSaving = false }
+        do {
+            try await tunnelService.deleteConnections(accountId: accountId, tunnelId: tunnel.id)
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    // MARK: - 公共主机名（整组 PUT，catch-all 守末尾）
+
+    /// 新增或更新一条公共主机名。index 为 nil 时新增（并尝试自动建 CNAME）。
+    func saveHostname(_ rule: IngressRule, at index: Int?) async -> Bool {
+        guard !isSaving else { return false }
+        isSaving = true
+        error = nil
+        dnsNotice = nil
+        defer { isSaving = false }
+
+        var rules = publicHostnames
+        if let index, rules.indices.contains(index) {
+            rules[index] = rule
+        } else {
+            rules.append(rule)
+        }
+        guard await saveIngress(rules) else { return false }
+        if index == nil, let hostname = rule.hostname {
+            await ensureCNAME(for: hostname)   // 仅新增时建 DNS
+        }
+        return true
+    }
+
+    func deleteHostname(at index: Int) async {
+        guard !isSaving else { return }
+        isSaving = true
+        error = nil
+        defer { isSaving = false }
+        var rules = publicHostnames
+        guard rules.indices.contains(index) else { return }
+        rules.remove(at: index)
+        _ = await saveIngress(rules)
+        // 不自动删 DNS 记录，避免误删用户其它用途的记录
+    }
+
+    /// 拼装整份 ingress（编辑后的规则 + 原 catch-all）并回写。
+    private func saveIngress(_ rules: [IngressRule]) async -> Bool {
+        let catchAll = (config?.ingress ?? []).first { $0.isCatchAll } ?? .catchAll
+        var newConfig = config ?? TunnelConfig()
+        newConfig.ingress = rules + [catchAll]
+        do {
+            config = try await tunnelService.updateConfiguration(
+                accountId: accountId, tunnelId: tunnel.id, config: newConfig
+            )
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    /// 为公共主机名自动建代理 CNAME；无 dns.write 或找不到域名时给出手动提示。
+    private func ensureCNAME(for hostname: String) async {
+        guard canWriteDNS else {
+            dnsNotice = String(localized: "请在 DNS 中为 \(hostname) 添加代理 CNAME，目标 \(cnameTarget)")
+            return
+        }
+        do {
+            let zones = try await loadZones()
+            guard let zone = bestZone(for: hostname, in: zones) else {
+                dnsNotice = String(localized: "未找到 \(hostname) 所属域名，请手动添加代理 CNAME，目标 \(cnameTarget)")
+                return
+            }
+            let record = CreateDNSRecord(
+                type: "CNAME", name: hostname, content: cnameTarget,
+                proxied: true, ttl: 1, priority: nil,
+                comment: String(localized: "Cloudflare Tunnel")
+            )
+            _ = try await dnsService.createRecord(zoneId: zone.id, record: record)
+            dnsNotice = String(localized: "已自动添加代理 CNAME：\(hostname) → \(cnameTarget)")
+        } catch {
+            dnsNotice = String(localized: "DNS 记录未自动创建，请手动添加代理 CNAME，目标 \(cnameTarget)")
+        }
+    }
+
+    private func loadZones() async throws -> [Zone] {
+        if let zonesCache { return zonesCache }
+        let zones = try await zoneService.listZones(accountId: accountId)
+        zonesCache = zones
+        return zones
+    }
+
+    /// hostname 所属 zone：取名字最长的后缀匹配项（处理多级子域名/多 zone）。
+    private func bestZone(for hostname: String, in zones: [Zone]) -> Zone? {
+        zones
+            .filter { hostname == $0.name || hostname.hasSuffix("." + $0.name) }
+            .max { $0.name.count < $1.name.count }
     }
 }
 

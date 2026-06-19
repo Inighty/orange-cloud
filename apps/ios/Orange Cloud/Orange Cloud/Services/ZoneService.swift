@@ -44,4 +44,17 @@ struct ZoneService {
         }
         return zone
     }
+
+    /// 新建 Zone（添加域名）。type 默认 "full"——Cloudflare 作权威 DNS，
+    /// 响应返回分配的 name_servers，状态为 pending，待用户在注册商处更换 NS 后激活。
+    func createZone(name: String, accountId: String, type: String = "full") async throws -> Zone {
+        let response: CFAPIResponse<Zone> = try await client.post(
+            "zones",
+            body: CreateZoneRequest(name: name, type: type, account: .init(id: accountId))
+        )
+        guard response.success, let zone = response.result else {
+            throw response.toAPIError()
+        }
+        return zone
+    }
 }
