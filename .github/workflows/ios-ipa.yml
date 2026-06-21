@@ -87,9 +87,6 @@ jobs:
           ARCHIVE_PATH="$RUNNER_TEMP/OrangeCloud.xcarchive"
           EXPORT_DIR="$RUNNER_TEMP/ipa"
           PAYLOAD_DIR="$RUNNER_TEMP/Payload"
-          TEAM_ID="6G78MMY657"
-          KEYCHAIN_GROUP="$TEAM_ID.jiamin.chen.orange-cloud.shared"
-          APP_GROUP="group.jiamin.chen.Orange-Cloud"
 
           APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name "*.app" -print -quit)"
 
@@ -105,46 +102,13 @@ jobs:
           APP_BUNDLE="$PAYLOAD_DIR/$(basename "$APP_PATH")"
           rm -rf "$APP_BUNDLE/Watch" "$APP_BUNDLE/PlugIns"
 
-          make_entitlements() {
-            local bundle_id="$1"
-            local output_path="$2"
-
-            cat > "$output_path" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>application-identifier</key>
-            <string>$TEAM_ID.$bundle_id</string>
-            <key>com.apple.developer.team-identifier</key>
-            <string>$TEAM_ID</string>
-            <key>com.apple.security.application-groups</key>
-            <array>
-              <string>$APP_GROUP</string>
-            </array>
-            <key>keychain-access-groups</key>
-            <array>
-              <string>$KEYCHAIN_GROUP</string>
-            </array>
-          </dict>
-          </plist>
-          PLIST
-          }
-
           sign_bundle() {
             local bundle_path="$1"
-            local bundle_id
-            local entitlements_path
-
-            bundle_id="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle_path/Info.plist")"
-            entitlements_path="$RUNNER_TEMP/$bundle_id.entitlements"
-            make_entitlements "$bundle_id" "$entitlements_path"
 
             /usr/bin/codesign \
               --force \
               --sign - \
               --timestamp=none \
-              --entitlements "$entitlements_path" \
               "$bundle_path"
           }
 
@@ -157,6 +121,27 @@ jobs:
 
           sign_bundle "$APP_BUNDLE"
           /usr/bin/codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+
+          REPORT_PATH="$EXPORT_DIR/OrangeCloud-TrollStore-package.txt"
+          {
+            echo "IPA: $IPA_NAME"
+            echo "Bundle: $(basename "$APP_BUNDLE")"
+            echo "Bundle ID: $(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_BUNDLE/Info.plist")"
+            echo "Minimum OS: $(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP_BUNDLE/Info.plist")"
+            echo
+            echo "Package tree:"
+            find "$PAYLOAD_DIR" -maxdepth 4 -print | sort
+            echo
+            echo "Codesign:"
+            /usr/bin/codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1
+            echo
+            echo "Entitlements:"
+            if /usr/bin/codesign -d --entitlements :- "$APP_BUNDLE" 2>&1; then
+              :
+            else
+              echo "No entitlements embedded in the app signature."
+            fi
+          } > "$REPORT_PATH"
 
           cd "$(dirname "$PAYLOAD_DIR")"
           /usr/bin/zip -qry "$EXPORT_DIR/$IPA_NAME" "$(basename "$PAYLOAD_DIR")"
@@ -178,7 +163,8 @@ jobs:
           IPA_PATH="$RUNNER_TEMP/ipa/$IPA_NAME"
 
           gh release create "$TAG" "$IPA_PATH" \
+            "$RUNNER_TEMP/ipa/OrangeCloud-TrollStore-package.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --title "iOS IPA $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
-            --notes "TrollStore IPA built from $GITHUB_SHA." \
+            --notes "Minimal TrollStore IPA built from $GITHUB_SHA. This build removes Watch, Widget extensions, and custom entitlements." \
             --latest
