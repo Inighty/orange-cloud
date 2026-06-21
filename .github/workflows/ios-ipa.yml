@@ -1,0 +1,88 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/ios/**"
+      - ".github/workflows/ios-ipa.yml"
+
+permissions:
+  contents: read
+
+env:
+  IOS_PROJECT_DIR: apps/ios/Orange Cloud
+  IOS_PROJECT: Orange Cloud.xcodeproj
+  IOS_SCHEME: Orange Cloud
+  IPA_NAME: OrangeCloud-TrollStore.ipa
+
+jobs:
+  build-ipa:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: List project schemes
+        working-directory: ${{ env.IOS_PROJECT_DIR }}
+        run: xcodebuild -list -project "$IOS_PROJECT"
+
+      - name: Resolve package dependencies
+        working-directory: ${{ env.IOS_PROJECT_DIR }}
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project "$IOS_PROJECT" \
+            -scheme "$IOS_SCHEME"
+
+      - name: Archive app without code signing
+        working-directory: ${{ env.IOS_PROJECT_DIR }}
+        run: |
+          ARCHIVE_PATH="$RUNNER_TEMP/OrangeCloud.xcarchive"
+
+          xcodebuild archive \
+            -project "$IOS_PROJECT" \
+            -scheme "$IOS_SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO
+
+      - name: Package IPA
+        run: |
+          ARCHIVE_PATH="$RUNNER_TEMP/OrangeCloud.xcarchive"
+          EXPORT_DIR="$RUNNER_TEMP/ipa"
+          PAYLOAD_DIR="$RUNNER_TEMP/Payload"
+
+          APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name "*.app" -print -quit)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app bundle found in $ARCHIVE_PATH/Products/Applications"
+            exit 1
+          fi
+
+          rm -rf "$PAYLOAD_DIR" "$EXPORT_DIR"
+          mkdir -p "$PAYLOAD_DIR" "$EXPORT_DIR"
+          cp -R "$APP_PATH" "$PAYLOAD_DIR/"
+
+          cd "$(dirname "$PAYLOAD_DIR")"
+          /usr/bin/zip -qry "$EXPORT_DIR/$IPA_NAME" "$(basename "$PAYLOAD_DIR")"
+          ls -lh "$EXPORT_DIR/$IPA_NAME"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeCloud-TrollStore-IPA
+          path: ${{ runner.temp }}/ipa/${{ env.IPA_NAME }}
+          if-no-files-found: error
+          retention-days: 14
