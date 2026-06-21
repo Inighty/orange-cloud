@@ -87,6 +87,9 @@ jobs:
           ARCHIVE_PATH="$RUNNER_TEMP/OrangeCloud.xcarchive"
           EXPORT_DIR="$RUNNER_TEMP/ipa"
           PAYLOAD_DIR="$RUNNER_TEMP/Payload"
+          TEAM_ID="6G78MMY657"
+          KEYCHAIN_GROUP="$TEAM_ID.jiamin.chen.orange-cloud.shared"
+          APP_GROUP="group.jiamin.chen.Orange-Cloud"
 
           APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name "*.app" -print -quit)"
 
@@ -98,6 +101,69 @@ jobs:
           rm -rf "$PAYLOAD_DIR" "$EXPORT_DIR"
           mkdir -p "$PAYLOAD_DIR" "$EXPORT_DIR"
           cp -R "$APP_PATH" "$PAYLOAD_DIR/"
+
+          APP_BUNDLE="$PAYLOAD_DIR/$(basename "$APP_PATH")"
+          rm -rf "$APP_BUNDLE/Watch"
+
+          make_entitlements() {
+            local bundle_id="$1"
+            local output_path="$2"
+
+            cat > "$output_path" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>application-identifier</key>
+            <string>$TEAM_ID.$bundle_id</string>
+            <key>com.apple.developer.team-identifier</key>
+            <string>$TEAM_ID</string>
+            <key>com.apple.security.application-groups</key>
+            <array>
+              <string>$APP_GROUP</string>
+            </array>
+            <key>keychain-access-groups</key>
+            <array>
+              <string>$KEYCHAIN_GROUP</string>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+          }
+
+          sign_bundle() {
+            local bundle_path="$1"
+            local bundle_id
+            local entitlements_path
+
+            bundle_id="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$bundle_path/Info.plist")"
+            entitlements_path="$RUNNER_TEMP/$bundle_id.entitlements"
+            make_entitlements "$bundle_id" "$entitlements_path"
+
+            /usr/bin/codesign \
+              --force \
+              --sign - \
+              --timestamp=none \
+              --entitlements "$entitlements_path" \
+              "$bundle_path"
+          }
+
+          if [ -d "$APP_BUNDLE/Frameworks" ]; then
+            find "$APP_BUNDLE/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) -print0 |
+              while IFS= read -r -d '' framework_path; do
+                /usr/bin/codesign --force --sign - --timestamp=none "$framework_path"
+              done
+          fi
+
+          if [ -d "$APP_BUNDLE/PlugIns" ]; then
+            find "$APP_BUNDLE/PlugIns" -maxdepth 1 -type d -name "*.appex" -print0 |
+              while IFS= read -r -d '' extension_path; do
+                sign_bundle "$extension_path"
+              done
+          fi
+
+          sign_bundle "$APP_BUNDLE"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
           cd "$(dirname "$PAYLOAD_DIR")"
           /usr/bin/zip -qry "$EXPORT_DIR/$IPA_NAME" "$(basename "$PAYLOAD_DIR")"
