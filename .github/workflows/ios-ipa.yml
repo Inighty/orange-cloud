@@ -156,20 +156,12 @@ jobs:
             sign_macho "$(app_executable_path "$bundle_path")"
           }
 
-          sign_full_bundle_tree() {
+          sign_app_bundle_only() {
             local bundle_path="$1"
 
-            sign_embedded_binaries "$bundle_path"
-
-            find "$bundle_path" -mindepth 2 -name "*.appex" -type d -print0 |
-              while IFS= read -r -d '' nested_bundle; do
-                sign_bundle_executable "$nested_bundle"
-              done
-
-            find "$bundle_path" -mindepth 2 -name "*.app" -type d -print0 |
-              while IFS= read -r -d '' nested_bundle; do
-                sign_bundle_executable "$nested_bundle"
-              done
+            if [ -d "$bundle_path/Frameworks" ]; then
+              sign_embedded_binaries "$bundle_path/Frameworks"
+            fi
 
             sign_bundle_executable "$bundle_path"
           }
@@ -230,7 +222,7 @@ jobs:
 
           FULL_APP_BUNDLE="$FULL_PAYLOAD_DIR/$(basename "$APP_PATH")"
           strip_xcode_metadata "$FULL_APP_BUNDLE"
-          sign_full_bundle_tree "$FULL_APP_BUNDLE"
+          sign_app_bundle_only "$FULL_APP_BUNDLE"
           write_package_report \
             "$FULL_IPA_NAME" \
             "$FULL_PAYLOAD_DIR" \
