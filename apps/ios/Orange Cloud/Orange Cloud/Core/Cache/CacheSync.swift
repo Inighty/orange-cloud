@@ -35,6 +35,9 @@ enum CacheSync {
         }
         try context.save()
 
+        #if OPENSOURCE_UNLOCKED
+        AppLog.app.info("Skipping Widget/Spotlight zone sync in OPENSOURCE_UNLOCKED build")
+        #else
         WidgetSnapshot(
             accountName: accountName,
             totalZones: zones.count,
@@ -44,6 +47,7 @@ enum CacheSync {
         WidgetCenter.shared.reloadTimelines(ofKind: "ZoneStatusWidget")
 
         SpotlightIndexer.indexZones(zones)
+        #endif
     }
 
     /// Worker 脚本列表 upsert 进缓存（仅限当前账号）

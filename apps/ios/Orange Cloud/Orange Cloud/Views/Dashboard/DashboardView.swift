@@ -215,6 +215,9 @@ struct DashboardView: View {
 
     /// 用量快照 → App Group（用量 Widget 数据源；按服务分组，额度口径与页面一致）
     private func writeUsageWidgetSnapshot() {
+        #if OPENSOURCE_UNLOCKED
+        AppLog.app.info("Skipping usage widget snapshot in OPENSOURCE_UNLOCKED build")
+        #else
         guard let usage = viewModel.usage else { return }
         let workersPaid = effectiveWorkersPaid
         let label = workersPaid ? monthlyLabel : String(localized: "今日")
@@ -293,6 +296,7 @@ struct DashboardView: View {
 
         WidgetDataStore.saveUsage(WidgetUsageData(services: services, updatedAt: Date()))
         WidgetCenter.shared.reloadTimelines(ofKind: "UsageWidget")
+        #endif
     }
 
     // MARK: - 问候区（晨昏头部：日期 + 时段问候 + 健康一句话 + 地平线弧，每分钟自走）

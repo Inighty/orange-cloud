@@ -30,9 +30,11 @@ final class SessionStore {
     var accounts: [Account] = []
     var selectedAccount: Account? {
         didSet {
+            #if !OPENSOURCE_UNLOCKED
             // Widget 自取用量数据需要知道当前账户
             UserDefaults(suiteName: WidgetSnapshot.appGroupID)?
                 .set(selectedAccount?.id, forKey: "currentAccountId")
+            #endif
         }
     }
     var isLoadingAccounts = false

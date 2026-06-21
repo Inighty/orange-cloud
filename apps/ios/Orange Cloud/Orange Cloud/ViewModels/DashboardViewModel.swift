@@ -278,6 +278,9 @@ final class DashboardViewModel {
 
     /// Zone 指标快照 → App Group（Widget 数据源）
     private func writeZoneWidgetSnapshots(zones: [(id: String, name: String)], traffic: [String: ZoneTrafficBundle]) {
+        #if OPENSOURCE_UNLOCKED
+        AppLog.app.info("Skipping zone widget/watch snapshot in OPENSOURCE_UNLOCKED build")
+        #else
         let metrics: [WidgetZoneMetrics] = zones.compactMap { zone in
             guard let bundle = traffic[zone.id], !bundle.points.isEmpty else { return nil }
             let points = bundle.points
@@ -307,5 +310,6 @@ final class DashboardViewModel {
         WidgetCenter.shared.reloadTimelines(ofKind: "ZoneChartWidget")
         // 数据刷新后把最新快照推给 Apple Watch
         WatchSessionManager.shared.pushCurrentState()
+        #endif
     }
 }
