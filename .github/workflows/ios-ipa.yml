@@ -16,7 +16,8 @@ env:
   IOS_PROJECT_DIR: apps/ios/Orange Cloud
   IOS_PROJECT: Orange Cloud.xcodeproj
   IOS_SCHEME: Orange Cloud
-  IPA_NAME: OrangeCloud-TrollStore.ipa
+  MINIMAL_IPA_NAME: OrangeCloud-TrollStore-minimal.ipa
+  FULL_IPA_NAME: OrangeCloud-TrollStore-full.ipa
 
 jobs:
   build-ipa:
@@ -83,13 +84,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            AD_HOC_CODE_SIGNING_ALLOWED=NO
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=OPENSOURCE_UNLOCKED
 
       - name: Package IPA
         run: |
           ARCHIVE_PATH="$RUNNER_TEMP/OrangeCloud.xcarchive"
           EXPORT_DIR="$RUNNER_TEMP/ipa"
-          PAYLOAD_DIR="$RUNNER_TEMP/Payload"
+          WORK_DIR="$RUNNER_TEMP/package-work"
+          APP_GROUP_ID="group.jiamin.chen.Orange-Cloud"
+          KEYCHAIN_GROUP_ID="6G78MMY657.jiamin.chen.orange-cloud.shared"
+          TEAM_ID="6G78MMY657"
+          PLIST_BUDDY="/usr/libexec/PlistBuddy"
 
           APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name "*.app" -print -quit)"
 
@@ -98,70 +104,182 @@ jobs:
             exit 1
           fi
 
-          rm -rf "$PAYLOAD_DIR" "$EXPORT_DIR"
-          mkdir -p "$PAYLOAD_DIR" "$EXPORT_DIR"
-          cp -R "$APP_PATH" "$PAYLOAD_DIR/"
+          rm -rf "$WORK_DIR" "$EXPORT_DIR"
+          mkdir -p "$WORK_DIR" "$EXPORT_DIR"
 
-          APP_BUNDLE="$PAYLOAD_DIR/$(basename "$APP_PATH")"
-          rm -rf "$APP_BUNDLE/Watch" "$APP_BUNDLE/PlugIns"
-          rm -rf "$APP_BUNDLE/_CodeSignature" "$APP_BUNDLE/Metadata.appintents"
-          find "$APP_BUNDLE" -name "*.appintents" -type d -prune -exec rm -rf {} +
-          find "$APP_BUNDLE" -name "*.icon" -type d -prune -exec rm -rf {} +
+          app_executable_path() {
+            local bundle_path="$1"
+            local executable_name
+
+            executable_name="$("$PLIST_BUDDY" -c "Print :CFBundleExecutable" "$bundle_path/Info.plist")"
+            echo "$bundle_path/$executable_name"
+          }
 
           sign_macho() {
             local binary_path="$1"
 
+            if [ ! -f "$binary_path" ]; then
+              echo "::error::Mach-O binary not found: $binary_path"
+              exit 1
+            fi
+
             ldid -S "$binary_path"
           }
 
-          if [ -d "$APP_BUNDLE/Frameworks" ]; then
-            find "$APP_BUNDLE/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) -print0 |
+          sign_macho_with_entitlements() {
+            local binary_path="$1"
+            local entitlements_path="$2"
+
+            if [ ! -f "$binary_path" ]; then
+              echo "::error::Mach-O binary not found: $binary_path"
+              exit 1
+            fi
+
+            ldid -S"$entitlements_path" "$binary_path"
+          }
+
+          strip_xcode_metadata() {
+            local bundle_path="$1"
+
+            find "$bundle_path" -name "_CodeSignature" -type d -prune -exec rm -rf {} +
+            find "$bundle_path" -name "Metadata.appintents" -type d -prune -exec rm -rf {} +
+            find "$bundle_path" -name "*.appintents" -type d -prune -exec rm -rf {} +
+            find "$bundle_path" -name "*.icon" -type d -prune -exec rm -rf {} +
+          }
+
+          sign_embedded_binaries() {
+            local bundle_path="$1"
+
+            find "$bundle_path" -name "*.framework" -type d -print0 |
               while IFS= read -r -d '' framework_path; do
-                if [ -d "$framework_path" ]; then
-                  framework_name="$(basename "$framework_path" .framework)"
+                framework_name="$(basename "$framework_path" .framework)"
+
+                if [ -f "$framework_path/$framework_name" ]; then
                   sign_macho "$framework_path/$framework_name"
-                else
-                  sign_macho "$framework_path"
                 fi
               done
-          fi
 
-          APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_BUNDLE/Info.plist")"
-          sign_macho "$APP_BUNDLE/$APP_EXECUTABLE"
+            find "$bundle_path" -name "*.dylib" -type f -print0 |
+              while IFS= read -r -d '' dylib_path; do
+                sign_macho "$dylib_path"
+              done
+          }
 
-          REPORT_PATH="$EXPORT_DIR/OrangeCloud-TrollStore-package.txt"
-          {
-            echo "IPA: $IPA_NAME"
-            echo "Bundle: $(basename "$APP_BUNDLE")"
-            echo "Bundle ID: $(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_BUNDLE/Info.plist")"
-            echo "Minimum OS: $(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP_BUNDLE/Info.plist")"
-            echo
-            echo "Package tree:"
-            find "$PAYLOAD_DIR" -maxdepth 4 -print | sort
-            echo
-            echo "Codesign:"
-            /usr/bin/codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1 || true
-            echo
-            echo "ldid:"
-            ldid -e "$APP_BUNDLE/$APP_EXECUTABLE" 2>&1 || true
-            echo
-            echo "Entitlements:"
-            if /usr/bin/codesign -d --entitlements :- "$APP_BUNDLE" 2>&1; then
-              :
-            else
-              echo "No entitlements embedded in the app signature."
-            fi
-          } > "$REPORT_PATH"
+          create_entitlements() {
+            local bundle_id="$1"
+            local entitlements_path="$2"
 
-          cd "$(dirname "$PAYLOAD_DIR")"
-          /usr/bin/zip -qry "$EXPORT_DIR/$IPA_NAME" "$(basename "$PAYLOAD_DIR")"
-          ls -lh "$EXPORT_DIR/$IPA_NAME"
+            /usr/bin/plutil -create xml1 "$entitlements_path"
+            "$PLIST_BUDDY" -c "Add :application-identifier string $TEAM_ID.$bundle_id" "$entitlements_path"
+            "$PLIST_BUDDY" -c "Add :com.apple.developer.team-identifier string $TEAM_ID" "$entitlements_path"
+            "$PLIST_BUDDY" -c "Add :get-task-allow bool false" "$entitlements_path"
+            "$PLIST_BUDDY" -c "Add :com.apple.security.application-groups array" "$entitlements_path"
+            "$PLIST_BUDDY" -c "Add :com.apple.security.application-groups:0 string $APP_GROUP_ID" "$entitlements_path"
+            "$PLIST_BUDDY" -c "Add :keychain-access-groups array" "$entitlements_path"
+            "$PLIST_BUDDY" -c "Add :keychain-access-groups:0 string $KEYCHAIN_GROUP_ID" "$entitlements_path"
+          }
+
+          sign_bundle_with_entitlements() {
+            local bundle_path="$1"
+            local entitlements_dir="$2"
+            local bundle_id
+            local entitlements_path
+
+            bundle_id="$("$PLIST_BUDDY" -c "Print :CFBundleIdentifier" "$bundle_path/Info.plist")"
+            entitlements_path="$entitlements_dir/$bundle_id.plist"
+            create_entitlements "$bundle_id" "$entitlements_path"
+            sign_macho_with_entitlements "$(app_executable_path "$bundle_path")" "$entitlements_path"
+          }
+
+          sign_full_bundle_tree() {
+            local bundle_path="$1"
+            local entitlements_dir="$2"
+
+            sign_embedded_binaries "$bundle_path"
+
+            find "$bundle_path" -mindepth 2 -name "*.appex" -type d -print0 |
+              while IFS= read -r -d '' nested_bundle; do
+                sign_bundle_with_entitlements "$nested_bundle" "$entitlements_dir"
+              done
+
+            find "$bundle_path" -mindepth 2 -name "*.app" -type d -print0 |
+              while IFS= read -r -d '' nested_bundle; do
+                sign_bundle_with_entitlements "$nested_bundle" "$entitlements_dir"
+              done
+
+            sign_bundle_with_entitlements "$bundle_path" "$entitlements_dir"
+          }
+
+          write_package_report() {
+            local ipa_name="$1"
+            local payload_dir="$2"
+            local app_bundle="$3"
+            local report_path="$4"
+
+            {
+              echo "IPA: $ipa_name"
+              echo "Bundle: $(basename "$app_bundle")"
+              echo "Bundle ID: $("$PLIST_BUDDY" -c "Print :CFBundleIdentifier" "$app_bundle/Info.plist")"
+              echo "Minimum OS: $("$PLIST_BUDDY" -c "Print :MinimumOSVersion" "$app_bundle/Info.plist")"
+              echo
+              echo "Package tree:"
+              find "$payload_dir" -maxdepth 5 -print | sort
+              echo
+              echo "Codesign:"
+              /usr/bin/codesign -dv --verbose=4 "$app_bundle" 2>&1 || true
+              echo
+              echo "ldid entitlements:"
+              ldid -e "$(app_executable_path "$app_bundle")" 2>&1 || true
+            } > "$report_path"
+          }
+
+          zip_payload() {
+            local payload_dir="$1"
+            local ipa_name="$2"
+
+            (
+              cd "$(dirname "$payload_dir")"
+              /usr/bin/zip -qry "$EXPORT_DIR/$ipa_name" "$(basename "$payload_dir")"
+            )
+            ls -lh "$EXPORT_DIR/$ipa_name"
+          }
+
+          MINIMAL_PAYLOAD_DIR="$WORK_DIR/minimal/Payload"
+          mkdir -p "$MINIMAL_PAYLOAD_DIR"
+          cp -R "$APP_PATH" "$MINIMAL_PAYLOAD_DIR/"
+
+          MINIMAL_APP_BUNDLE="$MINIMAL_PAYLOAD_DIR/$(basename "$APP_PATH")"
+          strip_xcode_metadata "$MINIMAL_APP_BUNDLE"
+          rm -rf "$MINIMAL_APP_BUNDLE/Watch" "$MINIMAL_APP_BUNDLE/PlugIns"
+          sign_embedded_binaries "$MINIMAL_APP_BUNDLE"
+          sign_macho "$(app_executable_path "$MINIMAL_APP_BUNDLE")"
+          write_package_report \
+            "$MINIMAL_IPA_NAME" \
+            "$MINIMAL_PAYLOAD_DIR" \
+            "$MINIMAL_APP_BUNDLE" \
+            "$EXPORT_DIR/OrangeCloud-TrollStore-minimal-package.txt"
+          zip_payload "$MINIMAL_PAYLOAD_DIR" "$MINIMAL_IPA_NAME"
+
+          FULL_PAYLOAD_DIR="$WORK_DIR/full/Payload"
+          FULL_ENTITLEMENTS_DIR="$WORK_DIR/full-entitlements"
+          mkdir -p "$FULL_PAYLOAD_DIR" "$FULL_ENTITLEMENTS_DIR"
+          cp -R "$APP_PATH" "$FULL_PAYLOAD_DIR/"
+
+          FULL_APP_BUNDLE="$FULL_PAYLOAD_DIR/$(basename "$APP_PATH")"
+          strip_xcode_metadata "$FULL_APP_BUNDLE"
+          sign_full_bundle_tree "$FULL_APP_BUNDLE" "$FULL_ENTITLEMENTS_DIR"
+          write_package_report \
+            "$FULL_IPA_NAME" \
+            "$FULL_PAYLOAD_DIR" \
+            "$FULL_APP_BUNDLE" \
+            "$EXPORT_DIR/OrangeCloud-TrollStore-full-package.txt"
+          zip_payload "$FULL_PAYLOAD_DIR" "$FULL_IPA_NAME"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: OrangeCloud-TrollStore-IPA
-          path: ${{ runner.temp }}/ipa/${{ env.IPA_NAME }}
+          path: ${{ runner.temp }}/ipa/*
           if-no-files-found: error
           retention-days: 14
 
@@ -170,11 +288,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="ios-ipa-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          IPA_PATH="$RUNNER_TEMP/ipa/$IPA_NAME"
 
-          gh release create "$TAG" "$IPA_PATH" \
-            "$RUNNER_TEMP/ipa/OrangeCloud-TrollStore-package.txt" \
+          gh release create "$TAG" \
+            "$RUNNER_TEMP/ipa/$MINIMAL_IPA_NAME" \
+            "$RUNNER_TEMP/ipa/$FULL_IPA_NAME" \
+            "$RUNNER_TEMP/ipa/OrangeCloud-TrollStore-minimal-package.txt" \
+            "$RUNNER_TEMP/ipa/OrangeCloud-TrollStore-full-package.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --title "iOS IPA $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
-            --notes "Minimal TrollStore IPA built from $GITHUB_SHA. This build removes Watch, Widget extensions, and custom entitlements." \
+            --notes "Pro-unlocked TrollStore IPAs built from $GITHUB_SHA. Download OrangeCloud-TrollStore-full.ipa for Widget/Watch/App Group/Keychain support. Use OrangeCloud-TrollStore-minimal.ipa as the known-good install fallback." \
             --latest
