@@ -10,7 +10,7 @@ on:
       - ".github/workflows/ios-ipa.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   IOS_PROJECT_DIR: apps/ios/Orange Cloud
@@ -20,7 +20,7 @@ env:
 
 jobs:
   build-ipa:
-    name: Build unsigned IPA
+    name: Build TrollStore IPA
     runs-on: macos-15
     timeout-minutes: 60
 
@@ -103,7 +103,7 @@ jobs:
           cp -R "$APP_PATH" "$PAYLOAD_DIR/"
 
           APP_BUNDLE="$PAYLOAD_DIR/$(basename "$APP_PATH")"
-          rm -rf "$APP_BUNDLE/Watch"
+          rm -rf "$APP_BUNDLE/Watch" "$APP_BUNDLE/PlugIns"
 
           make_entitlements() {
             local bundle_id="$1"
@@ -155,15 +155,8 @@ jobs:
               done
           fi
 
-          if [ -d "$APP_BUNDLE/PlugIns" ]; then
-            find "$APP_BUNDLE/PlugIns" -maxdepth 1 -type d -name "*.appex" -print0 |
-              while IFS= read -r -d '' extension_path; do
-                sign_bundle "$extension_path"
-              done
-          fi
-
           sign_bundle "$APP_BUNDLE"
-          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          /usr/bin/codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 
           cd "$(dirname "$PAYLOAD_DIR")"
           /usr/bin/zip -qry "$EXPORT_DIR/$IPA_NAME" "$(basename "$PAYLOAD_DIR")"
@@ -176,3 +169,16 @@ jobs:
           path: ${{ runner.temp }}/ipa/${{ env.IPA_NAME }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish IPA release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="ios-ipa-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          IPA_PATH="$RUNNER_TEMP/ipa/$IPA_NAME"
+
+          gh release create "$TAG" "$IPA_PATH" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "iOS IPA $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
+            --notes "TrollStore IPA built from $GITHUB_SHA." \
+            --latest
