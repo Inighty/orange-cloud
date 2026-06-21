@@ -42,6 +42,9 @@ jobs:
             -project "$IOS_PROJECT" \
             -scheme "$IOS_SCHEME"
 
+      - name: Install TrollStore signing tools
+        run: brew install ldid
+
       - name: Prepare Xcode 16 app icon
         working-directory: ${{ env.IOS_PROJECT_DIR }}
         run: |
@@ -101,26 +104,30 @@ jobs:
 
           APP_BUNDLE="$PAYLOAD_DIR/$(basename "$APP_PATH")"
           rm -rf "$APP_BUNDLE/Watch" "$APP_BUNDLE/PlugIns"
+          rm -rf "$APP_BUNDLE/_CodeSignature" "$APP_BUNDLE/Metadata.appintents"
+          find "$APP_BUNDLE" -name "*.appintents" -type d -prune -exec rm -rf {} +
+          find "$APP_BUNDLE" -name "*.icon" -type d -prune -exec rm -rf {} +
 
-          sign_bundle() {
-            local bundle_path="$1"
+          sign_macho() {
+            local binary_path="$1"
 
-            /usr/bin/codesign \
-              --force \
-              --sign - \
-              --timestamp=none \
-              "$bundle_path"
+            ldid -S "$binary_path"
           }
 
           if [ -d "$APP_BUNDLE/Frameworks" ]; then
             find "$APP_BUNDLE/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) -print0 |
               while IFS= read -r -d '' framework_path; do
-                /usr/bin/codesign --force --sign - --timestamp=none "$framework_path"
+                if [ -d "$framework_path" ]; then
+                  framework_name="$(basename "$framework_path" .framework)"
+                  sign_macho "$framework_path/$framework_name"
+                else
+                  sign_macho "$framework_path"
+                fi
               done
           fi
 
-          sign_bundle "$APP_BUNDLE"
-          /usr/bin/codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+          APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_BUNDLE/Info.plist")"
+          sign_macho "$APP_BUNDLE/$APP_EXECUTABLE"
 
           REPORT_PATH="$EXPORT_DIR/OrangeCloud-TrollStore-package.txt"
           {
@@ -133,7 +140,10 @@ jobs:
             find "$PAYLOAD_DIR" -maxdepth 4 -print | sort
             echo
             echo "Codesign:"
-            /usr/bin/codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1
+            /usr/bin/codesign -dv --verbose=4 "$APP_BUNDLE" 2>&1 || true
+            echo
+            echo "ldid:"
+            ldid -e "$APP_BUNDLE/$APP_EXECUTABLE" 2>&1 || true
             echo
             echo "Entitlements:"
             if /usr/bin/codesign -d --entitlements :- "$APP_BUNDLE" 2>&1; then
