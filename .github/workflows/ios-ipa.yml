@@ -92,9 +92,6 @@ jobs:
           ARCHIVE_PATH="$RUNNER_TEMP/OrangeCloud.xcarchive"
           EXPORT_DIR="$RUNNER_TEMP/ipa"
           WORK_DIR="$RUNNER_TEMP/package-work"
-          APP_GROUP_ID="group.jiamin.chen.Orange-Cloud"
-          KEYCHAIN_GROUP_ID="6G78MMY657.jiamin.chen.orange-cloud.shared"
-          TEAM_ID="6G78MMY657"
           PLIST_BUDDY="/usr/libexec/PlistBuddy"
 
           APP_PATH="$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -type d -name "*.app" -print -quit)"
@@ -126,18 +123,6 @@ jobs:
             ldid -S "$binary_path"
           }
 
-          sign_macho_with_entitlements() {
-            local binary_path="$1"
-            local entitlements_path="$2"
-
-            if [ ! -f "$binary_path" ]; then
-              echo "::error::Mach-O binary not found: $binary_path"
-              exit 1
-            fi
-
-            ldid -S"$entitlements_path" "$binary_path"
-          }
-
           strip_xcode_metadata() {
             local bundle_path="$1"
 
@@ -165,49 +150,28 @@ jobs:
               done
           }
 
-          create_entitlements() {
-            local bundle_id="$1"
-            local entitlements_path="$2"
-
-            /usr/bin/plutil -create xml1 "$entitlements_path"
-            "$PLIST_BUDDY" -c "Add :application-identifier string $TEAM_ID.$bundle_id" "$entitlements_path"
-            "$PLIST_BUDDY" -c "Add :com.apple.developer.team-identifier string $TEAM_ID" "$entitlements_path"
-            "$PLIST_BUDDY" -c "Add :get-task-allow bool false" "$entitlements_path"
-            "$PLIST_BUDDY" -c "Add :com.apple.security.application-groups array" "$entitlements_path"
-            "$PLIST_BUDDY" -c "Add :com.apple.security.application-groups:0 string $APP_GROUP_ID" "$entitlements_path"
-            "$PLIST_BUDDY" -c "Add :keychain-access-groups array" "$entitlements_path"
-            "$PLIST_BUDDY" -c "Add :keychain-access-groups:0 string $KEYCHAIN_GROUP_ID" "$entitlements_path"
-          }
-
-          sign_bundle_with_entitlements() {
+          sign_bundle_executable() {
             local bundle_path="$1"
-            local entitlements_dir="$2"
-            local bundle_id
-            local entitlements_path
 
-            bundle_id="$("$PLIST_BUDDY" -c "Print :CFBundleIdentifier" "$bundle_path/Info.plist")"
-            entitlements_path="$entitlements_dir/$bundle_id.plist"
-            create_entitlements "$bundle_id" "$entitlements_path"
-            sign_macho_with_entitlements "$(app_executable_path "$bundle_path")" "$entitlements_path"
+            sign_macho "$(app_executable_path "$bundle_path")"
           }
 
           sign_full_bundle_tree() {
             local bundle_path="$1"
-            local entitlements_dir="$2"
 
             sign_embedded_binaries "$bundle_path"
 
             find "$bundle_path" -mindepth 2 -name "*.appex" -type d -print0 |
               while IFS= read -r -d '' nested_bundle; do
-                sign_bundle_with_entitlements "$nested_bundle" "$entitlements_dir"
+                sign_bundle_executable "$nested_bundle"
               done
 
             find "$bundle_path" -mindepth 2 -name "*.app" -type d -print0 |
               while IFS= read -r -d '' nested_bundle; do
-                sign_bundle_with_entitlements "$nested_bundle" "$entitlements_dir"
+                sign_bundle_executable "$nested_bundle"
               done
 
-            sign_bundle_with_entitlements "$bundle_path" "$entitlements_dir"
+            sign_bundle_executable "$bundle_path"
           }
 
           write_package_report() {
@@ -261,13 +225,12 @@ jobs:
           zip_payload "$MINIMAL_PAYLOAD_DIR" "$MINIMAL_IPA_NAME"
 
           FULL_PAYLOAD_DIR="$WORK_DIR/full/Payload"
-          FULL_ENTITLEMENTS_DIR="$WORK_DIR/full-entitlements"
-          mkdir -p "$FULL_PAYLOAD_DIR" "$FULL_ENTITLEMENTS_DIR"
+          mkdir -p "$FULL_PAYLOAD_DIR"
           cp -R "$APP_PATH" "$FULL_PAYLOAD_DIR/"
 
           FULL_APP_BUNDLE="$FULL_PAYLOAD_DIR/$(basename "$APP_PATH")"
           strip_xcode_metadata "$FULL_APP_BUNDLE"
-          sign_full_bundle_tree "$FULL_APP_BUNDLE" "$FULL_ENTITLEMENTS_DIR"
+          sign_full_bundle_tree "$FULL_APP_BUNDLE"
           write_package_report \
             "$FULL_IPA_NAME" \
             "$FULL_PAYLOAD_DIR" \
@@ -296,5 +259,5 @@ jobs:
             "$RUNNER_TEMP/ipa/OrangeCloud-TrollStore-full-package.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --title "iOS IPA $GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" \
-            --notes "Pro-unlocked TrollStore IPAs built from $GITHUB_SHA. Download OrangeCloud-TrollStore-full.ipa for Widget/Watch/App Group/Keychain support. Use OrangeCloud-TrollStore-minimal.ipa as the known-good install fallback." \
+            --notes "Pro-unlocked TrollStore IPAs built from $GITHUB_SHA. Download OrangeCloud-TrollStore-full.ipa for restored Widget/Watch bundle content. Use OrangeCloud-TrollStore-minimal.ipa as the known-good install fallback." \
             --latest
