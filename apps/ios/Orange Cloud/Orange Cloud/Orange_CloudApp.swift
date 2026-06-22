@@ -47,46 +47,63 @@ struct Orange_CloudApp: App {
                 enterApplicationAfterCrashReport()
             }
             .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme)
+        } else if let authManager {
+            applicationContent(authManager: authManager)
         } else {
-            ContentView()
-                .environment(requiredAuthManager())
-                .environment(EntitlementStore.shared)
-                .tint(.ocOrange)
+            LaunchingApplicationView()
                 .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme)
-                .onContinueUserActivity(CSSearchableItemActionType) { activity in
-                    handleSpotlightTap(activity)
+                .task {
+                    startApplicationIfNeeded()
                 }
-                .modelContainer(CacheContainer.shared)
         }
+    }
+
+    private func applicationContent(authManager: AuthManager) -> some View {
+        ContentView()
+            .environment(authManager)
+            .environment(EntitlementStore.shared)
+            .tint(.ocOrange)
+            .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme)
+            .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                handleSpotlightTap(activity)
+            }
+            .modelContainer(CacheContainer.shared)
     }
 
     private func enterApplicationAfterCrashReport() {
         CrashReporter.clearPendingReport()
+        CrashReporter.recordBreadcrumb("CrashReport enter application tapped")
         WhatsNewGate.suppressAtLaunch = false
-        authManager = Self.startApplication()
         lastCrashReport = nil
     }
 
-    private func requiredAuthManager() -> AuthManager {
-        guard let authManager else {
-            fatalError("AuthManager missing after crash report dismissal")
-        }
-        return authManager
+    private func startApplicationIfNeeded() {
+        guard authManager == nil else { return }
+        authManager = Self.startApplication()
     }
 
     private static func startApplication() -> AuthManager {
+        CrashReporter.recordBreadcrumb("AppStart begin")
         let manager = AuthManager()
+        CrashReporter.recordBreadcrumb("AppStart auth manager created")
         WhatsNewGate.wasLoggedInAtLaunch = manager.isLoggedIn
+        CrashReporter.recordBreadcrumb("AppStart whats new gate updated")
         BackgroundRefresh.register(authManager: manager)
+        CrashReporter.recordBreadcrumb("AppStart background refresh registered")
         WatchSessionManager.shared.start(authManager: manager)
+        CrashReporter.recordBreadcrumb("AppStart watch session started")
         EntitlementStore.shared.start()
+        CrashReporter.recordBreadcrumb("AppStart entitlement store started")
         reapOrphanTailActivities()
+        CrashReporter.recordBreadcrumb("AppStart orphan activities reaped")
         try? Tips.configure()
+        CrashReporter.recordBreadcrumb("AppStart tips configured")
         AppLog.logLaunch(
             loggedIn: manager.isLoggedIn,
             sessionCount: manager.sessions.count,
             iCloudSync: manager.iCloudSyncEnabled
         )
+        CrashReporter.recordBreadcrumb("AppStart launch logged")
         return manager
     }
 
@@ -126,5 +143,13 @@ private struct CrashReportView: View {
                 }
             }
         }
+    }
+}
+
+private struct LaunchingApplicationView: View {
+
+    var body: some View {
+        ProgressView("正在进入应用")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
