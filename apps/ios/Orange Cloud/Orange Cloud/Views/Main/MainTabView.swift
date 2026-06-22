@@ -76,8 +76,13 @@ struct MainTabView: View {
     // 让按账号过滤的 @Query 谓词刷新、列表数据重新拉取（资源跟着选中账号走）。
 
     @ViewBuilder private var dashboardTab: some View {
+        #if OPENSOURCE_UNLOCKED
+        UnlockedDashboardView(session: session)
+            .id(session.selectedAccount?.id)
+        #else
         DashboardView(session: session)
             .id(session.selectedAccount?.id)
+        #endif
     }
 
     @ViewBuilder private var zonesTab: some View {
