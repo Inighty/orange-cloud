@@ -22,6 +22,7 @@ struct Orange_CloudApp: App {
 
     init() {
         CrashReporter.install()
+        BackgroundRefresh.register()
         let pendingCrash = CrashReporter.pendingReport()
         _lastCrashReport = State(initialValue: pendingCrash)
         WhatsNewGate.suppressAtLaunch = pendingCrash != nil
@@ -88,8 +89,8 @@ struct Orange_CloudApp: App {
         CrashReporter.recordBreadcrumb("AppStart auth manager created")
         WhatsNewGate.wasLoggedInAtLaunch = manager.isLoggedIn
         CrashReporter.recordBreadcrumb("AppStart whats new gate updated")
-        BackgroundRefresh.register(authManager: manager)
-        CrashReporter.recordBreadcrumb("AppStart background refresh registered")
+        BackgroundRefresh.setAuthManager(manager)
+        CrashReporter.recordBreadcrumb("AppStart background refresh auth attached")
         WatchSessionManager.shared.start(authManager: manager)
         CrashReporter.recordBreadcrumb("AppStart watch session started")
         EntitlementStore.shared.start()
