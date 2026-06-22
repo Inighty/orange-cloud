@@ -87,7 +87,6 @@ struct MainTabView: View {
     @ViewBuilder private var dashboardTab: some View {
         #if OPENSOURCE_UNLOCKED
         UnlockedDashboardView(session: session)
-            .id(session.selectedAccount?.id)
         #else
         DashboardView(session: session)
             .id(session.selectedAccount?.id)

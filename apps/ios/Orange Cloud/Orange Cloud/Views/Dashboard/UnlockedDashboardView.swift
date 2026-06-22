@@ -68,6 +68,12 @@ struct UnlockedDashboardView: View {
         .onAppear {
             recordBreadcrumb("appear")
         }
+        .onChange(of: session.accounts.count) {
+            recordBreadcrumb("accounts count changed")
+        }
+        .onChange(of: session.selectedAccount?.id) {
+            recordBreadcrumb("selected account changed")
+        }
     }
 
     private func routeButton(_ title: String, systemImage: String, module: AppModule) -> some View {
