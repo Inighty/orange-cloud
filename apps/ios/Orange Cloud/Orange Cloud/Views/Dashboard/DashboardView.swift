@@ -15,10 +15,9 @@ struct DashboardView: View {
     @Environment(SessionStore.self) private var session
     @Environment(AuthManager.self) private var auth
     @Environment(\.modelContext) private var modelContext
-    // 域名 / Workers 缓存只取当前账号（父视图 .id(selectedAccount) 切换账号时重建以刷新谓词）；
-    // DNS 记录缓存无 accountId 字段，按当前账号下的缓存域名在内存里过滤计数。
-    @Query private var cachedZones: [CachedZone]
-    @Query private var cachedWorkers: [CachedWorkerScript]
+    // 查询缓存全集后按当前账号过滤，避免账号加载完成时重建整个 Tab 根视图。
+    @Query(sort: \CachedZone.name) private var allCachedZones: [CachedZone]
+    @Query private var allCachedWorkers: [CachedWorkerScript]
     @Query private var cachedRecords: [CachedDNSRecord]
 
     @State private var viewModel: DashboardViewModel
@@ -28,6 +27,14 @@ struct DashboardView: View {
 
     private var currentAccountId: String {
         session.selectedAccount?.id ?? ""
+    }
+
+    private var cachedZones: [CachedZone] {
+        allCachedZones.filter { $0.accountId == currentAccountId }
+    }
+
+    private var cachedWorkers: [CachedWorkerScript] {
+        allCachedWorkers.filter { $0.accountId == currentAccountId }
     }
 
     private var accountPrefs: AccountPrefsStore.Prefs {
@@ -65,14 +72,6 @@ struct DashboardView: View {
     private var dayBoundaryRaw = DayBoundary.utc.rawValue
 
     init(session: SessionStore) {
-        let accountId = session.selectedAccount?.id ?? ""
-        _cachedZones = Query(
-            filter: #Predicate<CachedZone> { $0.accountId == accountId },
-            sort: \CachedZone.name
-        )
-        _cachedWorkers = Query(
-            filter: #Predicate<CachedWorkerScript> { $0.accountId == accountId }
-        )
         _viewModel = State(initialValue: DashboardViewModel(
             analyticsService: session.analyticsService,
             accountService: session.accountService,

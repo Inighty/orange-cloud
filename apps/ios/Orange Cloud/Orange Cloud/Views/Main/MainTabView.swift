@@ -81,16 +81,11 @@ struct MainTabView: View {
 
     // MARK: - Tab 内容（两套 TabView 写法共用）
 
-    // 各资源 Tab 用 .id(selectedAccount) 绑定当前账号：账号切换时整页重建，
-    // 让按账号过滤的 @Query 谓词刷新、列表数据重新拉取（资源跟着选中账号走）。
+    // 资源 Tab 用 .id(selectedAccount) 绑定当前账号：账号切换时整页重建。
+    // Dashboard 自己按当前账号过滤缓存，不在 Tab 根节点重建，避免账号加载后触发 iOS 17 SwiftUI abort。
 
     @ViewBuilder private var dashboardTab: some View {
-        #if OPENSOURCE_UNLOCKED
-        UnlockedDashboardView(session: session)
-        #else
         DashboardView(session: session)
-            .id(session.selectedAccount?.id)
-        #endif
     }
 
     @ViewBuilder private var zonesTab: some View {
