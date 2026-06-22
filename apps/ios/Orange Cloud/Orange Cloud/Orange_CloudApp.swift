@@ -15,15 +15,18 @@ import ActivityKit
 struct Orange_CloudApp: App {
 
     @State private var authManager: AuthManager
+    @State private var lastCrashReport: CrashReport?
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage(AppAppearance.storageKey) private var appearanceRaw = AppAppearance.system.rawValue
 
-    let sharedModelContainer = CacheContainer.shared
-
     init() {
+        CrashReporter.install()
+        let pendingCrash = CrashReporter.pendingReport()
+        _lastCrashReport = State(initialValue: pendingCrash)
         let manager = AuthManager()
         _authManager = State(initialValue: manager)
+        WhatsNewGate.suppressAtLaunch = pendingCrash != nil
         WhatsNewGate.wasLoggedInAtLaunch = manager.isLoggedIn
         BackgroundRefresh.register(authManager: manager)
         WatchSessionManager.shared.start(authManager: manager)
@@ -47,8 +50,15 @@ struct Orange_CloudApp: App {
                 .onContinueUserActivity(CSSearchableItemActionType) { activity in
                     handleSpotlightTap(activity)
                 }
+                .sheet(item: $lastCrashReport) { report in
+                    CrashReportSheet(report: report) {
+                        CrashReporter.clearPendingReport()
+                        WhatsNewGate.suppressAtLaunch = false
+                        lastCrashReport = nil
+                    }
+                }
         }
-        .modelContainer(sharedModelContainer)
+        .modelContainer(CacheContainer.shared)
         .onChange(of: scenePhase) {
             AppLog.app.info("scenePhase -> \(String(describing: scenePhase))")
             if scenePhase == .background {
@@ -69,5 +79,30 @@ struct Orange_CloudApp: App {
     private func handleSpotlightTap(_ activity: NSUserActivity) {
         guard activity.userInfo?[CSSearchableItemActivityIdentifier] is String else { return }
         AppRouter.shared.pendingModule = .zones
+    }
+}
+
+private struct CrashReportSheet: View {
+
+    let report: CrashReport
+    let onDismiss: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(report.text)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+            }
+            .navigationTitle("上次崩溃日志")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("已读", action: onDismiss)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

@@ -51,4 +51,5 @@ nonisolated enum WhatsNewStore {
 /// 全新安装首次登录后不打扰。由 App.init 在创建 AuthManager 后写入。
 enum WhatsNewGate {
     static var wasLoggedInAtLaunch = false
+    static var suppressAtLaunch = false
 }

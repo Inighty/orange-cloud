@@ -107,6 +107,7 @@ private struct WhatsNewModifier: ViewModifier {
 
     private func evaluate() {
         guard payload == nil else { return }
+        guard !WhatsNewGate.suppressAtLaunch else { return }
         let current = WhatsNewStore.currentVersion
 
         // 全新安装（无 lastSeen 且本次启动并非已登录态）：静默对齐，不打扰新用户
