@@ -28,6 +28,48 @@ data class R2Object(
     @SerialName("storage_class") val storageClass: String? = null,
 )
 
+data class R2ObjectListRequest(
+    val accountId: String,
+    val bucket: String,
+    val prefix: String = "",
+    val cursor: String? = null,
+)
+
+data class R2ObjectPage(
+    val objects: List<R2Object>,
+    val folderPrefixes: List<String>,
+    val nextCursor: String?,
+)
+
+data class R2Folder(
+    val prefix: String,
+    val parentPrefix: String,
+) {
+    val name: String
+        get() = displayName(prefix, parentPrefix)
+
+    companion object {
+        fun makeList(prefixes: List<String>, parentPrefix: String): List<R2Folder> =
+            prefixes
+                .distinct()
+                .filter { it != parentPrefix }
+                .sorted()
+                .map { R2Folder(prefix = it, parentPrefix = parentPrefix) }
+
+        fun parentPrefix(prefix: String): String {
+            val trimmed = prefix.trim('/')
+            val index = trimmed.lastIndexOf('/')
+            if (index < 0) return ""
+            return trimmed.take(index + 1)
+        }
+
+        private fun displayName(prefix: String, parentPrefix: String): String {
+            val relative = prefix.removePrefix(parentPrefix)
+            return relative.trim('/').substringAfterLast('/')
+        }
+    }
+}
+
 @Serializable
 data class R2HttpMetadata(val contentType: String? = null)  // R2 对象元数据是 camelCase
 

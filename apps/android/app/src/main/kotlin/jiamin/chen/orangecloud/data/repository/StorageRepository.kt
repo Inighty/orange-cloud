@@ -10,6 +10,8 @@ import jiamin.chen.orangecloud.data.model.KVNamespace
 import jiamin.chen.orangecloud.data.model.R2Bucket
 import jiamin.chen.orangecloud.data.model.R2BucketList
 import jiamin.chen.orangecloud.data.model.R2Object
+import jiamin.chen.orangecloud.data.model.R2ObjectListRequest
+import jiamin.chen.orangecloud.data.model.R2ObjectPage
 import jiamin.chen.orangecloud.data.model.encodeStorageKey
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,15 +29,20 @@ class StorageRepository @Inject constructor(
     suspend fun listBuckets(accountId: String): List<R2Bucket> =
         api.get<R2BucketList>("accounts/$accountId/r2/buckets", listOf("per_page" to "100")).buckets
 
-    /** 对象列表（游标分页，一次一页）→ (对象, 下一页游标 or null)。 */
-    suspend fun listObjects(accountId: String, bucket: String, cursor: String?): Pair<List<R2Object>, String?> {
+    /** 对象列表（游标分页，一次一页）→ 对象、同级文件夹前缀、下一页游标。 */
+    suspend fun listObjects(request: R2ObjectListRequest): R2ObjectPage {
         val query = buildList {
             add("per_page" to "100")
-            cursor?.let { add("cursor" to it) }
+            add("delimiter" to "/")
+            if (request.prefix.isNotEmpty()) add("prefix" to request.prefix)
+            request.cursor?.let { add("cursor" to it) }
         }
-        val paged = api.getList<R2Object>("accounts/$accountId/r2/buckets/$bucket/objects", query)
+        val paged = api.getList<R2Object>(
+            "accounts/${request.accountId}/r2/buckets/${request.bucket}/objects",
+            query,
+        )
         val next = if (paged.info?.isTruncated == true) paged.info?.cursor else null
-        return paged.items to next
+        return R2ObjectPage(paged.items, paged.info?.delimited.orEmpty(), next)
     }
 
     suspend fun getObjectBytes(accountId: String, bucket: String, key: String): ByteArray =

@@ -11,7 +11,9 @@ import jiamin.chen.orangecloud.data.model.D1QueryResult
 import jiamin.chen.orangecloud.data.model.KVKey
 import jiamin.chen.orangecloud.data.model.KVNamespace
 import jiamin.chen.orangecloud.data.model.R2Bucket
+import jiamin.chen.orangecloud.data.model.R2Folder
 import jiamin.chen.orangecloud.data.model.R2Object
+import jiamin.chen.orangecloud.data.model.R2ObjectListRequest
 import jiamin.chen.orangecloud.data.model.D1Column
 import jiamin.chen.orangecloud.data.repository.AccountStore
 import jiamin.chen.orangecloud.data.repository.StorageRepository
@@ -136,6 +138,8 @@ sealed interface R2Event {
 
 data class R2ObjectUiState(
     val objects: List<R2Object> = emptyList(),
+    val folders: List<R2Folder> = emptyList(),
+    val currentPrefix: String = "",
     val isLoading: Boolean = false,
     val isLoadingMore: Boolean = false,
     val isUploading: Boolean = false,
@@ -144,7 +148,10 @@ data class R2ObjectUiState(
     val missingScope: Boolean = false,
     val hasMore: Boolean = false,
     val canWrite: Boolean = false,
-)
+) {
+    val isContentEmpty: Boolean
+        get() = folders.isEmpty() && objects.isEmpty()
+}
 
 @HiltViewModel
 class R2ObjectListViewModel @Inject constructor(
@@ -158,6 +165,7 @@ class R2ObjectListViewModel @Inject constructor(
     private val hasScope = authRepository.hasScope(Scopes.R2_READ)
     private val canWrite = authRepository.hasScope(Scopes.R2_WRITE)
     private var cursor: String? = null
+    private var currentPrefix = ""
 
     private val _uiState = MutableStateFlow(
         R2ObjectUiState(isLoading = hasScope, missingScope = !hasScope, canWrite = canWrite),
@@ -175,7 +183,15 @@ class R2ObjectListViewModel @Inject constructor(
         if (!hasScope) return
         cursor = null
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, hasError = false, objects = emptyList()) }
+            _uiState.update {
+                it.copy(
+                    isLoading = true,
+                    hasError = false,
+                    objects = emptyList(),
+                    folders = emptyList(),
+                    currentPrefix = currentPrefix,
+                )
+            }
             fetchPage(reset = true)
             _uiState.update { it.copy(isLoading = false) }
         }
@@ -197,14 +213,50 @@ class R2ObjectListViewModel @Inject constructor(
                 _uiState.update { it.copy(hasError = true) }
                 return
             }
-            val (objects, next) = storageRepository.listObjects(accountId, bucket, cursor)
-            cursor = next
+            val page = storageRepository.listObjects(listRequest(accountId))
+            cursor = page.nextCursor
             _uiState.update {
-                it.copy(objects = if (reset) objects else it.objects + objects, hasMore = next != null)
+                it.copy(
+                    objects = if (reset) page.objects else it.objects + page.objects,
+                    folders = nextFolders(reset, it.folders, page.folderPrefixes),
+                    currentPrefix = currentPrefix,
+                    hasMore = page.nextCursor != null,
+                )
             }
         } catch (e: Exception) {
             _uiState.update { it.copy(hasError = true) }
         }
+    }
+
+    fun openFolder(folder: R2Folder) {
+        if (currentPrefix == folder.prefix) return
+        currentPrefix = folder.prefix
+        loadFirst()
+    }
+
+    fun openParentFolder() {
+        if (currentPrefix.isEmpty()) return
+        currentPrefix = R2Folder.parentPrefix(currentPrefix)
+        loadFirst()
+    }
+
+    fun title(prefix: String): String {
+        if (prefix.isEmpty()) return bucket
+        return "$bucket/${prefix.trim('/')}"
+    }
+
+    private fun listRequest(accountId: String): R2ObjectListRequest =
+        R2ObjectListRequest(
+            accountId = accountId,
+            bucket = bucket,
+            prefix = currentPrefix,
+            cursor = cursor,
+        )
+
+    private fun nextFolders(reset: Boolean, current: List<R2Folder>, prefixes: List<String>): List<R2Folder> {
+        val incoming = R2Folder.makeList(prefixes, currentPrefix)
+        if (reset) return incoming
+        return (current + incoming).distinctBy { it.prefix }.sortedBy { it.prefix }
     }
 
     /** 下载对象原始字节（详情页预览/打开用）。失败返回 null。 */
@@ -228,7 +280,7 @@ class R2ObjectListViewModel @Inject constructor(
             _uiState.update { it.copy(isUploading = true) }
             try {
                 val accountId = accountStore.selectedAccountId.value ?: error("no account")
-                storageRepository.putObject(accountId, bucket, filename, bytes, contentType)
+                storageRepository.putObject(accountId, bucket, currentPrefix + filename, bytes, contentType)
                 eventChannel.send(R2Event.Uploaded)
                 loadFirst()
             } catch (e: Exception) {

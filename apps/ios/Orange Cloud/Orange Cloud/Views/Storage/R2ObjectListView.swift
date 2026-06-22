@@ -39,20 +39,20 @@ struct R2ObjectListView: View {
 
     var body: some View {
         Group {
-            if viewModel.objects.isEmpty && viewModel.isLoading {
+            if viewModel.isContentEmpty && viewModel.isLoading {
                 SkeletonList(rows: 9, trailing: true)
-            } else if viewModel.objects.isEmpty {
+            } else if viewModel.isContentEmpty && viewModel.currentPrefix.isEmpty {
                 ContentUnavailableView {
-                    Label("空存储桶", systemImage: "archivebox")
+                    Label(viewModel.currentPrefix.isEmpty ? "空存储桶" : "空文件夹", systemImage: "archivebox")
                 } description: {
-                    Text(canWrite ? String(localized: "点击右上角上传第一个文件") : String(localized: "这个存储桶里还没有对象"))
+                    Text(emptyDescription)
                 }
             } else {
                 objectList
             }
         }
         .background { SkyBackground() }
-        .navigationTitle(bucket.name)
+        .navigationTitle(viewModel.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -145,6 +145,13 @@ struct R2ObjectListView: View {
         .sensoryFeedback(.success, trigger: viewModel.didUpload)
     }
 
+    private var emptyDescription: String {
+        if !viewModel.currentPrefix.isEmpty {
+            return canWrite ? String(localized: "点击右上角上传第一个文件") : String(localized: "这个文件夹里还没有对象")
+        }
+        return canWrite ? String(localized: "点击右上角上传第一个文件") : String(localized: "这个存储桶里还没有对象")
+    }
+
     /// 可预览：50 MB 以内（QuickLook 需要完整下载）
     private func previewable(_ object: R2Object) -> Bool {
         (object.size ?? 0) <= 50_000_000
@@ -164,6 +171,39 @@ struct R2ObjectListView: View {
 
     private var objectList: some View {
         List {
+            folderRows
+            objectRows
+            loadMoreRow
+        }
+        .scrollContentBackground(.hidden)
+        .refreshable { await viewModel.load() }
+    }
+
+    @ViewBuilder
+    private var folderRows: some View {
+        if !viewModel.currentPrefix.isEmpty {
+            Button {
+                Task { await viewModel.openParentFolder() }
+            } label: {
+                R2FolderRow(title: "..", subtitle: String(localized: "上级文件夹"), systemImage: "arrow.up")
+            }
+            .buttonStyle(.plain)
+            .glassRow()
+        }
+
+        ForEach(viewModel.folders) { folder in
+            Button {
+                Task { await viewModel.open(folder: folder) }
+            } label: {
+                R2FolderRow(title: folder.name, subtitle: folder.prefix)
+            }
+            .buttonStyle(.plain)
+            .glassRow()
+        }
+    }
+
+    @ViewBuilder
+    private var objectRows: some View {
             ForEach(viewModel.objects) { object in
                 HStack(spacing: 8) {
                     Button {
@@ -219,6 +259,10 @@ struct R2ObjectListView: View {
                 }
                 .glassRow()
             }
+    }
+
+    @ViewBuilder
+    private var loadMoreRow: some View {
             if viewModel.hasMore {
                 Button {
                     Task { await viewModel.loadMore() }
@@ -231,9 +275,6 @@ struct R2ObjectListView: View {
                 }
                 .glassRow()
             }
-        }
-        .scrollContentBackground(.hidden)
-        .refreshable { await viewModel.load() }
     }
 
     // MARK: - 上传
@@ -254,149 +295,5 @@ struct R2ObjectListView: View {
         let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
             ?? "application/octet-stream"
         _ = await viewModel.upload(data: data, filename: url.lastPathComponent, contentType: mime)
-    }
-}
-
-private struct R2ObjectRow: View {
-    let object: R2Object
-
-    private var icon: String {
-        let ext = (object.key as NSString).pathExtension.lowercased()
-        if let type = UTType(filenameExtension: ext) {
-            if type.conforms(to: .image) { return "photo" }
-            if type.conforms(to: .movie) || type.conforms(to: .video) { return "film" }
-            if type.conforms(to: .audio) { return "waveform" }
-            if type.conforms(to: .pdf) { return "doc.richtext" }
-            if type.conforms(to: .text) { return "doc.text" }
-        }
-        return "doc"
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            TintIcon(systemImage: icon, color: .ocOrange, size: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(object.key)
-                    .font(.callout)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack(spacing: 6) {
-                    if let size = object.size {
-                        Text(Int64(size).formatted(.byteCount(style: .file)))
-                    }
-                    if let modified = WorkerScript.parseDate(object.lastModified) {
-                        Text(modified, format: .relative(presentation: .named))
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .contentShape(Rectangle())
-    }
-}
-
-// MARK: - 对象详情（元数据 + QuickLook 预览 + 删除）
-
-private struct R2ObjectDetailView: View {
-
-    let object: R2Object
-    let viewModel: R2ObjectListViewModel
-    let canWrite: Bool
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var previewURL: URL?
-    @State private var showDeleteConfirm = false
-
-    /// 预览大小阈值：50 MB
-    private var previewable: Bool {
-        (object.size ?? 0) <= 50_000_000
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("对象") {
-                    LabeledContent("Key") {
-                        Text(object.key)
-                            .font(.callout.monospaced())
-                            .textSelection(.enabled)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    if let size = object.size {
-                        LabeledContent("大小", value: Int64(size).formatted(.byteCount(style: .file)))
-                    }
-                    if let contentType = object.httpMetadata?.contentType {
-                        LabeledContent("Content-Type", value: contentType)
-                    }
-                    if let storageClass = object.storageClass {
-                        LabeledContent("存储类型", value: storageClass)
-                    }
-                    if let etag = object.etag {
-                        LabeledContent("ETag") {
-                            Text(etag)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                        }
-                    }
-                    if let modified = WorkerScript.parseDate(object.lastModified) {
-                        LabeledContent("修改时间") {
-                            Text(modified, format: .dateTime.year().month().day().hour().minute())
-                        }
-                    }
-                }
-
-                Section {
-                    Button {
-                        Task {
-                            previewURL = await viewModel.downloadToTemp(object: object)
-                        }
-                    } label: {
-                        HStack {
-                            Label("预览", systemImage: "eye")
-                            Spacer()
-                            if viewModel.isDownloading {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(!previewable || viewModel.isDownloading)
-
-                    if canWrite {
-                        Button(role: .destructive) {
-                            showDeleteConfirm = true
-                        } label: {
-                            Label("删除对象", systemImage: "trash")
-                        }
-                    }
-                } footer: {
-                    if !previewable {
-                        Text("超过 50 MB 的对象暂不支持在 App 内预览。")
-                    } else {
-                        Text("图片、视频、PDF、Office 文档等均可预览（QuickLook）。")
-                    }
-                }
-            }
-            .navigationTitle("对象详情")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                }
-            }
-            .quickLookPreview($previewURL)
-            .confirmationDialog("删除对象？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-                Button("删除 \(object.key)", role: .destructive) {
-                    Task {
-                        if await viewModel.delete(key: object.key) {
-                            dismiss()
-                        }
-                    }
-                }
-            } message: {
-                Text("此操作不可撤销。")
-            }
-        }
     }
 }

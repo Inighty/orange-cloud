@@ -32,6 +32,7 @@ data class ResultInfo(
     @SerialName("total_count") val totalCount: Int? = null,
     // 游标分页（R2 对象、KV keys 等）
     val cursor: String? = null,
+    val delimited: List<String>? = null,
     @SerialName("is_truncated") val isTruncated: Boolean? = null,
 )
 

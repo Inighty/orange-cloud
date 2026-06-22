@@ -42,12 +42,19 @@ final class R2BucketListViewModel {
 final class R2ObjectListViewModel {
 
     var objects: [R2Object] = []
+    var folders: [R2Folder] = []
+    var currentPrefix = ""
     var isLoading = false
     var isLoadingMore = false
     var error: String?
     private(set) var nextCursor: String?
 
     var hasMore: Bool { nextCursor != nil }
+    var isContentEmpty: Bool { folders.isEmpty && objects.isEmpty }
+    var displayTitle: String {
+        guard !currentPrefix.isEmpty else { return bucketName }
+        return "\(bucketName)/\(currentPrefix.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
+    }
 
     private let service: R2Service
     private let accountId: String
@@ -63,9 +70,8 @@ final class R2ObjectListViewModel {
         isLoading = true
         error = nil
         do {
-            let page = try await service.listObjects(accountId: accountId, bucketName: bucketName)
-            objects = page.objects
-            nextCursor = page.nextCursor
+            let page = try await service.listObjects(listOptions())
+            apply(page, reset: true)
         } catch {
             self.error = error.localizedDescription
         }
@@ -76,13 +82,44 @@ final class R2ObjectListViewModel {
         guard let cursor = nextCursor, !isLoadingMore else { return }
         isLoadingMore = true
         do {
-            let page = try await service.listObjects(accountId: accountId, bucketName: bucketName, cursor: cursor)
-            objects.append(contentsOf: page.objects)
-            nextCursor = page.nextCursor
+            let page = try await service.listObjects(listOptions(cursor: cursor))
+            apply(page, reset: false)
         } catch {
             self.error = error.localizedDescription
         }
         isLoadingMore = false
+    }
+
+    func open(folder: R2Folder) async {
+        guard currentPrefix != folder.prefix else { return }
+        currentPrefix = folder.prefix
+        await load()
+    }
+
+    func openParentFolder() async {
+        guard !currentPrefix.isEmpty else { return }
+        currentPrefix = R2Folder.parentPrefix(of: currentPrefix)
+        await load()
+    }
+
+    private func listOptions(cursor: String? = nil) -> R2ObjectListOptions {
+        R2ObjectListOptions(
+            accountId: accountId,
+            bucketName: bucketName,
+            prefix: currentPrefix,
+            cursor: cursor
+        )
+    }
+
+    private func apply(_ page: R2ObjectPage, reset: Bool) {
+        let pageFolders = R2Folder.makeList(from: page.folderPrefixes, parentPrefix: currentPrefix)
+        folders = reset ? pageFolders : Self.mergedFolders(folders, pageFolders)
+        objects = reset ? page.objects : objects + page.objects
+        nextCursor = page.nextCursor
+    }
+
+    private static func mergedFolders(_ current: [R2Folder], _ incoming: [R2Folder]) -> [R2Folder] {
+        Array(Set(current + incoming)).sorted { $0.prefix < $1.prefix }
     }
 
     // MARK: - 对象读写
@@ -125,7 +162,7 @@ final class R2ObjectListViewModel {
         do {
             try await service.putObject(
                 accountId: accountId, bucketName: bucketName,
-                key: filename, data: data, contentType: contentType
+                key: currentPrefix + filename, data: data, contentType: contentType
             )
             didUpload.toggle()
             await load()

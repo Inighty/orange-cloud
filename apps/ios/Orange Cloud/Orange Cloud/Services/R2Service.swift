@@ -74,23 +74,29 @@ struct R2Service {
     }
 
     /// 对象列表（游标分页，一次一页）
-    func listObjects(
-        accountId: String,
-        bucketName: String,
-        cursor: String? = nil
-    ) async throws -> (objects: [R2Object], nextCursor: String?) {
-        var queryItems = [URLQueryItem(name: "per_page", value: "100")]
-        if let cursor {
+    func listObjects(_ options: R2ObjectListOptions) async throws -> R2ObjectPage {
+        var queryItems = [
+            URLQueryItem(name: "per_page", value: "100"),
+            URLQueryItem(name: "delimiter", value: "/")
+        ]
+        if !options.prefix.isEmpty {
+            queryItems.append(URLQueryItem(name: "prefix", value: options.prefix))
+        }
+        if let cursor = options.cursor {
             queryItems.append(URLQueryItem(name: "cursor", value: cursor))
         }
         let response: CFAPIResponseArray<R2Object> = try await client.get(
-            "accounts/\(accountId)/r2/buckets/\(bucketName)/objects",
+            "accounts/\(options.accountId)/r2/buckets/\(options.bucketName)/objects",
             queryItems: queryItems
         )
         guard response.success else {
             throw response.toAPIError()
         }
         let isTruncated = response.resultInfo?.isTruncated ?? false
-        return (response.result ?? [], isTruncated ? response.resultInfo?.cursor : nil)
+        return R2ObjectPage(
+            objects: response.result ?? [],
+            folderPrefixes: response.resultInfo?.delimited ?? [],
+            nextCursor: isTruncated ? response.resultInfo?.cursor : nil
+        )
     }
 }

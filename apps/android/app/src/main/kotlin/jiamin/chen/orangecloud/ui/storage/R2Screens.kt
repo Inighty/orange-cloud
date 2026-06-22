@@ -6,13 +6,10 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,25 +20,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Cloud
-import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Upload
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -55,11 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -179,7 +167,7 @@ fun R2ObjectListScreen(
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().systemBarsPadding()) {
                 SkyHeader(
-                    title = viewModel.bucket,
+                    title = viewModel.title(state.currentPrefix),
                     onSky = onSky,
                     isLoading = state.isLoading,
                     onRefresh = { viewModel.loadFirst() },
@@ -192,20 +180,38 @@ fun R2ObjectListScreen(
                     state.missingScope ->
                         SkyEmptyState(Icons.Outlined.Lock, stringResource(R.string.scope_missing), onSky, stringResource(R.string.common_refresh)) { viewModel.loadFirst() }
 
-                    state.objects.isEmpty() && state.isLoading ->
+                    state.isContentEmpty && state.isLoading ->
                         Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator(color = onSky) }
 
-                    state.objects.isEmpty() && state.hasError ->
+                    state.isContentEmpty && state.hasError ->
                         SkyEmptyState(Icons.AutoMirrored.Outlined.InsertDriveFile, stringResource(R.string.error_generic), onSky, stringResource(R.string.common_refresh)) { viewModel.loadFirst() }
 
-                    state.objects.isEmpty() ->
+                    state.isContentEmpty && state.currentPrefix.isEmpty() ->
                         SkyEmptyState(Icons.AutoMirrored.Outlined.InsertDriveFile, stringResource(R.string.r2_objects_empty), onSky, stringResource(R.string.common_refresh)) { viewModel.loadFirst() }
 
                     else -> LazyColumn(
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        items(state.objects, key = { it.key }) { obj ->
+                        if (state.currentPrefix.isNotEmpty()) {
+                            item {
+                                StorageRow(
+                                    Icons.Outlined.KeyboardArrowUp,
+                                    "..",
+                                    state.currentPrefix,
+                                    onClick = { viewModel.openParentFolder() },
+                                )
+                            }
+                        }
+                        items(state.folders, key = { "folder:${it.prefix}" }) { folder ->
+                            StorageRow(
+                                Icons.Outlined.Folder,
+                                folder.name,
+                                folder.prefix,
+                                onClick = { viewModel.openFolder(folder) },
+                            )
+                        }
+                        items(state.objects, key = { "object:${it.key}" }) { obj ->
                             StorageRow(
                                 Icons.AutoMirrored.Outlined.InsertDriveFile,
                                 obj.key,
@@ -252,103 +258,17 @@ fun R2ObjectListScreen(
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
             ObjectDetail(
-                obj = obj,
-                canWrite = state.canWrite,
-                isDownloading = state.isDownloading,
-                onOpen = { openObject(obj) },
-                onDelete = { viewModel.delete(obj.key) },
+                state = R2ObjectDetailState(
+                    obj = obj,
+                    canWrite = state.canWrite,
+                    isDownloading = state.isDownloading,
+                ),
+                actions = R2ObjectDetailActions(
+                    onOpen = { openObject(obj) },
+                    onDelete = { viewModel.delete(obj.key) },
+                ),
             )
         }
-    }
-}
-
-@Composable
-private fun ObjectDetail(
-    obj: R2Object,
-    canWrite: Boolean,
-    isDownloading: Boolean,
-    onOpen: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    var confirmDelete by remember { mutableStateOf(false) }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp)
-            .padding(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(
-            obj.key,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        obj.size?.let { MetaRow(stringResource(R.string.r2_meta_size), formatBytes(it)) }
-        obj.httpMetadata?.contentType?.let { MetaRow(stringResource(R.string.r2_meta_type), it) }
-        obj.storageClass?.let { MetaRow(stringResource(R.string.r2_meta_class), it) }
-        obj.etag?.let { MetaRow(stringResource(R.string.r2_meta_etag), it, mono = true) }
-        obj.lastModified?.let { MetaRow(stringResource(R.string.r2_meta_modified), it, mono = true) }
-
-        Spacer(Modifier.height(4.dp))
-
-        Button(
-            onClick = onOpen,
-            enabled = !isDownloading,
-            colors = ButtonDefaults.buttonColors(containerColor = OcOrange, contentColor = Color.White),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (isDownloading) {
-                CircularProgressIndicator(Modifier.height(18.dp).width(18.dp), strokeWidth = 2.dp, color = Color.White)
-            } else {
-                Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.height(18.dp).width(18.dp))
-            }
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.r2_download_open))
-        }
-
-        if (canWrite) {
-            if (confirmDelete) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { confirmDelete = false }, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.common_cancel))
-                    }
-                    Button(
-                        onClick = onDelete,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D), contentColor = Color.White),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(stringResource(R.string.r2_delete))
-                    }
-                }
-            } else {
-                TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Outlined.Delete, contentDescription = null, tint = Color(0xFFE5484D), modifier = Modifier.height(18.dp).width(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.r2_delete), color = Color(0xFFE5484D))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MetaRow(label: String, value: String, mono: Boolean = false) {
-    Row(Modifier.fillMaxWidth()) {
-        Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(12.dp))
-        Spacer(Modifier.weight(1f))
-        Text(
-            value,
-            fontSize = if (mono) 12.sp else 13.sp,
-            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(2f),
-            textAlign = androidx.compose.ui.text.style.TextAlign.End,
-        )
     }
 }
 

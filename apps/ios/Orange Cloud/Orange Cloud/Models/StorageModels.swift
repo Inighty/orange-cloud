@@ -47,6 +47,53 @@ nonisolated struct R2Object: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+nonisolated struct R2ObjectListOptions: Sendable {
+    let accountId:  String
+    let bucketName: String
+    let prefix:     String
+    let cursor:     String?
+
+    init(accountId: String, bucketName: String, prefix: String = "", cursor: String? = nil) {
+        self.accountId = accountId
+        self.bucketName = bucketName
+        self.prefix = prefix
+        self.cursor = cursor
+    }
+}
+
+nonisolated struct R2ObjectPage: Sendable {
+    let objects:        [R2Object]
+    let folderPrefixes: [String]
+    let nextCursor:     String?
+}
+
+nonisolated struct R2Folder: Identifiable, Hashable, Sendable {
+    let prefix:       String
+    let parentPrefix: String
+
+    var id: String { prefix }
+    var name: String { Self.displayName(prefix: prefix, parentPrefix: parentPrefix) }
+
+    static func makeList(from prefixes: [String], parentPrefix: String) -> [R2Folder] {
+        Array(Set(prefixes))
+            .filter { $0 != parentPrefix }
+            .sorted()
+            .map { R2Folder(prefix: $0, parentPrefix: parentPrefix) }
+    }
+
+    static func parentPrefix(of prefix: String) -> String {
+        let trimmed = prefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let lastSlash = trimmed.lastIndex(of: "/") else { return "" }
+        return String(trimmed[..<trimmed.index(after: lastSlash)])
+    }
+
+    private static func displayName(prefix: String, parentPrefix: String) -> String {
+        let relative = prefix.dropFirst(parentPrefix.count)
+        let trimmed = String(relative).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return trimmed.components(separatedBy: "/").last ?? trimmed
+    }
+}
+
 nonisolated struct R2HTTPMetadata: Codable, Hashable, Sendable {
     let contentType: String?
 
