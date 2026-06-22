@@ -24,6 +24,10 @@ struct UnlockedDashboardView: View {
         return String(localized: "已解锁 Pro")
     }
 
+    private var statusColor: Color {
+        session.error == nil ? Color.secondary : Color.red
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -34,7 +38,7 @@ struct UnlockedDashboardView: View {
                             .lineLimit(2)
                         Text(statusText)
                             .font(.subheadline)
-                            .foregroundStyle(session.error == nil ? .secondary : .red)
+                            .foregroundStyle(statusColor)
                     }
                     .padding(.vertical, 6)
                 }
