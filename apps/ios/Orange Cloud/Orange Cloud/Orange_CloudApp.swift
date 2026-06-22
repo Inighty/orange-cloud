@@ -14,7 +14,7 @@ import ActivityKit
 @main
 struct Orange_CloudApp: App {
 
-    @State private var authManager: AuthManager
+    @State private var authManager: AuthManager?
     @State private var lastCrashReport: CrashReport?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -24,47 +24,70 @@ struct Orange_CloudApp: App {
         CrashReporter.install()
         let pendingCrash = CrashReporter.pendingReport()
         _lastCrashReport = State(initialValue: pendingCrash)
-        let manager = AuthManager()
-        _authManager = State(initialValue: manager)
         WhatsNewGate.suppressAtLaunch = pendingCrash != nil
-        WhatsNewGate.wasLoggedInAtLaunch = manager.isLoggedIn
-        BackgroundRefresh.register(authManager: manager)
-        WatchSessionManager.shared.start(authManager: manager)
-        EntitlementStore.shared.start()
-        Self.reapOrphanTailActivities()
-        try? Tips.configure()
-        AppLog.logLaunch(
-            loggedIn: manager.isLoggedIn,
-            sessionCount: manager.sessions.count,
-            iCloudSync: manager.iCloudSyncEnabled
-        )
+        _authManager = State(initialValue: pendingCrash == nil ? Self.startApplication() : nil)
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(authManager)
-                .environment(EntitlementStore.shared)
-                .tint(.ocOrange)   // 全局品牌橙（Cloudflare #F48120）
-                .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme)
-                .onContinueUserActivity(CSSearchableItemActionType) { activity in
-                    handleSpotlightTap(activity)
-                }
-                .sheet(item: $lastCrashReport) { report in
-                    CrashReportSheet(report: report) {
-                        CrashReporter.clearPendingReport()
-                        WhatsNewGate.suppressAtLaunch = false
-                        lastCrashReport = nil
-                    }
-                }
+            rootContent
         }
-        .modelContainer(CacheContainer.shared)
         .onChange(of: scenePhase) {
             AppLog.app.info("scenePhase -> \(String(describing: scenePhase))")
             if scenePhase == .background {
                 BackgroundRefresh.schedule()
             }
         }
+    }
+
+    @ViewBuilder
+    private var rootContent: some View {
+        if let report = lastCrashReport {
+            CrashReportView(report: report) {
+                enterApplicationAfterCrashReport()
+            }
+            .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme)
+        } else {
+            ContentView()
+                .environment(requiredAuthManager())
+                .environment(EntitlementStore.shared)
+                .tint(.ocOrange)
+                .preferredColorScheme(AppAppearance(rawValue: appearanceRaw)?.colorScheme)
+                .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                    handleSpotlightTap(activity)
+                }
+                .modelContainer(CacheContainer.shared)
+        }
+    }
+
+    private func enterApplicationAfterCrashReport() {
+        CrashReporter.clearPendingReport()
+        WhatsNewGate.suppressAtLaunch = false
+        authManager = Self.startApplication()
+        lastCrashReport = nil
+    }
+
+    private func requiredAuthManager() -> AuthManager {
+        guard let authManager else {
+            fatalError("AuthManager missing after crash report dismissal")
+        }
+        return authManager
+    }
+
+    private static func startApplication() -> AuthManager {
+        let manager = AuthManager()
+        WhatsNewGate.wasLoggedInAtLaunch = manager.isLoggedIn
+        BackgroundRefresh.register(authManager: manager)
+        WatchSessionManager.shared.start(authManager: manager)
+        EntitlementStore.shared.start()
+        reapOrphanTailActivities()
+        try? Tips.configure()
+        AppLog.logLaunch(
+            loggedIn: manager.isLoggedIn,
+            sessionCount: manager.sessions.count,
+            iCloudSync: manager.iCloudSyncEnabled
+        )
+        return manager
     }
 
     /// 收尸：结束上次进程残留的 tail Live Activity。冷启动时没有任何 VM 持有引用，
@@ -82,7 +105,7 @@ struct Orange_CloudApp: App {
     }
 }
 
-private struct CrashReportSheet: View {
+private struct CrashReportView: View {
 
     let report: CrashReport
     let onDismiss: () -> Void
@@ -99,10 +122,9 @@ private struct CrashReportSheet: View {
             .navigationTitle("上次崩溃日志")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("已读", action: onDismiss)
+                    Button("进入应用", action: onDismiss)
                 }
             }
         }
-        .presentationDetents([.medium, .large])
     }
 }

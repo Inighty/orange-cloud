@@ -18,7 +18,10 @@ nonisolated enum CrashReporter {
 
     private static let directoryName = "Logs"
     private static let reportFileName = "last-crash.txt"
+    private static let breadcrumbFileName = "crash-breadcrumbs.txt"
     private static let maxReportCharacters = 24_000
+    private static let maxLogCharacters = 12_000
+    private static let maxBreadcrumbCharacters = 8_000
     private static let handledSignals: [Int32] = [
         SIGABRT, SIGILL, SIGSEGV, SIGFPE, SIGBUS, SIGPIPE, SIGTRAP,
     ]
@@ -36,13 +39,29 @@ nonisolated enum CrashReporter {
     }
 
     static func currentReportText() -> String? {
-        let text = try? String(contentsOf: reportURL, encoding: .utf8)
-        guard let text, !text.isEmpty else { return nil }
-        return String(text.prefix(maxReportCharacters))
+        currentReportText(includeRecentLog: true)
+    }
+
+    static func currentReportTextForExport() -> String? {
+        currentReportText(includeRecentLog: false)
+    }
+
+    private static func currentReportText(includeRecentLog: Bool) -> String? {
+        guard let crash = crashReportText() else { return nil }
+        let log = includeRecentLog ? logSection() : nil
+        return [crash, breadcrumbSection(), log]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
     }
 
     static func clearPendingReport() {
         try? FileManager.default.removeItem(at: reportURL)
+        try? FileManager.default.removeItem(at: breadcrumbURL)
+    }
+
+    static func recordBreadcrumb(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        appendBreadcrumb("\(timestamp) \(message)\n")
     }
 
     fileprivate static func record(exception: NSException) {
@@ -68,22 +87,62 @@ nonisolated enum CrashReporter {
     }
 
     private static var reportURL: URL {
+        logDirectory.appendingPathComponent(reportFileName)
+    }
+
+    private static var breadcrumbURL: URL {
+        logDirectory.appendingPathComponent(breadcrumbFileName)
+    }
+
+    private static var logDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(directoryName, isDirectory: true)
-            .appendingPathComponent(reportFileName)
     }
 
     private static func writeReport(title: String, details: [String], stack: [String]) {
         let report = formatReport(title: title, details: details, stack: stack)
         do {
-            try FileManager.default.createDirectory(
-                at: reportURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+            try createLogDirectory()
             try Data(report.utf8).write(to: reportURL, options: .atomic)
         } catch {
             NSLog("Orange Cloud crash report write failed: %@", error.localizedDescription)
         }
+    }
+
+    private static func appendBreadcrumb(_ line: String) {
+        do {
+            try createLogDirectory()
+            let previous = (try? String(contentsOf: breadcrumbURL, encoding: .utf8)) ?? ""
+            let text = String((previous + line).suffix(maxBreadcrumbCharacters))
+            try Data(text.utf8).write(to: breadcrumbURL, options: .atomic)
+        } catch {
+            NSLog("Orange Cloud breadcrumb write failed: %@", error.localizedDescription)
+        }
+    }
+
+    private static func createLogDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: logDirectory,
+            withIntermediateDirectories: true
+        )
+    }
+
+    private static func crashReportText() -> String? {
+        let text = try? String(contentsOf: reportURL, encoding: .utf8)
+        guard let text, !text.isEmpty else { return nil }
+        return String(text.prefix(maxReportCharacters))
+    }
+
+    private static func breadcrumbSection() -> String? {
+        let text = try? String(contentsOf: breadcrumbURL, encoding: .utf8)
+        guard let text, !text.isEmpty else { return nil }
+        return "Breadcrumbs:\n\(text)"
+    }
+
+    private static func logSection() -> String? {
+        let text = LogFileStore.shared.recentText(maxCharacters: maxLogCharacters)
+        guard !text.isEmpty else { return nil }
+        return "Recent AppLog:\n\(text)"
     }
 
     private static func formatReport(title: String, details: [String], stack: [String]) -> String {

@@ -90,15 +90,26 @@ nonisolated final class LogFileStore: @unchecked Sendable {
         queue.sync {
             _ = try? handle?.synchronize()
             let crash = formattedCrashReport()
-            let prev = (try? String(contentsOf: previousURL, encoding: .utf8)) ?? ""
-            let curr = (try? String(contentsOf: currentURL, encoding: .utf8)) ?? ""
-            return crash + prev + curr
+            return crash + combinedLogText()
+        }
+    }
+
+    func recentText(maxCharacters: Int) -> String {
+        queue.sync {
+            _ = try? handle?.synchronize()
+            return String(combinedLogText().suffix(maxCharacters))
         }
     }
 
     private func formattedCrashReport() -> String {
-        guard let report = CrashReporter.currentReportText() else { return "" }
+        guard let report = CrashReporter.currentReportTextForExport() else { return "" }
         return "===== Last Crash =====\n\(report)\n\n===== App Log =====\n"
+    }
+
+    private func combinedLogText() -> String {
+        let prev = (try? String(contentsOf: previousURL, encoding: .utf8)) ?? ""
+        let curr = (try? String(contentsOf: currentURL, encoding: .utf8)) ?? ""
+        return prev + curr
     }
 
     /// 写到临时文件返回 URL（邮件附件 / 系统分享用）。无内容时返回 nil。

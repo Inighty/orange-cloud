@@ -57,16 +57,35 @@ struct UnlockedDashboardView: View {
             }
             .navigationTitle("概览")
             .refreshable {
+                recordBreadcrumb("refresh begin")
                 await session.ensureAccounts()
+                recordBreadcrumb("refresh end")
             }
+        }
+        .task {
+            recordBreadcrumb("task")
+        }
+        .onAppear {
+            recordBreadcrumb("appear")
         }
     }
 
     private func routeButton(_ title: String, systemImage: String, module: AppModule) -> some View {
         Button {
+            recordBreadcrumb("route \(module.rawValue)")
             AppRouter.shared.pendingModule = module
         } label: {
             Label(title, systemImage: systemImage)
         }
+    }
+
+    private func recordBreadcrumb(_ event: String) {
+        CrashReporter.recordBreadcrumb(
+            "UnlockedDashboard \(event) accounts=\(session.accounts.count)"
+            + " selectedAccount=\(session.selectedAccount != nil)"
+            + " loading=\(session.isLoadingAccounts)"
+            + " error=\(session.error != nil)"
+            + " scopes=\(auth.grantedScopes.count)"
+        )
     }
 }

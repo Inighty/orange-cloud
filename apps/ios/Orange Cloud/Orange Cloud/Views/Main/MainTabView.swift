@@ -18,11 +18,20 @@ struct MainTabView: View {
     var body: some View {
         tabContainer
             .task {
+                recordBreadcrumb("task")
                 consumePendingRoute()
                 await session.ensureAccounts()
+                recordBreadcrumb("accounts ensured")
             }
             .onChange(of: router.pendingModule) {
+                recordBreadcrumb("pending route changed")
                 consumePendingRoute()
+            }
+            .onChange(of: selectedTab) {
+                recordBreadcrumb("selected tab changed")
+            }
+            .onAppear {
+                recordBreadcrumb("appear")
             }
     }
 
@@ -118,6 +127,7 @@ struct MainTabView: View {
     /// App Intent（Siri/快捷指令/Spotlight）发起的跳转
     private func consumePendingRoute() {
         guard let module = router.pendingModule else { return }
+        CrashReporter.recordBreadcrumb("MainTab consume route module=\(module.rawValue)")
         router.pendingModule = nil
         selectedTab = switch module {
         case .dashboard: .dashboard
@@ -130,5 +140,15 @@ struct MainTabView: View {
 
     enum AppTab: Hashable {
         case dashboard, zones, workers, storage, settings
+    }
+
+    private func recordBreadcrumb(_ event: String) {
+        CrashReporter.recordBreadcrumb(
+            "MainTab \(event) tab=\(selectedTab) accounts=\(session.accounts.count)"
+            + " selectedAccount=\(session.selectedAccount != nil)"
+            + " loading=\(session.isLoadingAccounts)"
+            + " error=\(session.error != nil)"
+            + " scopes=\(auth.grantedScopes.count)"
+        )
     }
 }
